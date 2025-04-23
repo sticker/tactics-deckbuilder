@@ -1,0 +1,5 @@
+packages:
+  - 'game-logic'
+  - 'server'
+  - 'client-web'
+  - 'smart-contracts'
