@@ -28,6 +28,9 @@ export default defineConfig({
       },
     }),
   ],
+  css: {
+    postcss: './postcss.config.js',
+  },
   resolve: {
     dedupe: ['react', 'react-dom'],
   },

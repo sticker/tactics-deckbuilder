@@ -8,16 +8,34 @@ const TILE_HEIGHT = 32;
 const TILE_HEIGHT_OFFSET = 16; // 高さ1単位あたりのオフセット
 
 // アイソメトリックの座標変換
-function isoToScreen(position: Position, height: number = 0): { x: number, y: number } {
+function isoToScreen(
+  position: Position,
+  height: number = 0
+): { x: number; y: number } {
   return {
-    x: (position.x - position.y) * TILE_WIDTH / 2,
-    y: (position.x + position.y) * TILE_HEIGHT / 2 - height * TILE_HEIGHT_OFFSET,
+    x: ((position.x - position.y) * TILE_WIDTH) / 2,
+    y:
+      ((position.x + position.y) * TILE_HEIGHT) / 2 -
+      height * TILE_HEIGHT_OFFSET,
   };
+}
+
+// スクリーン座標からアイソメトリック座標への変換
+function screenToIso(screenX: number, screenY: number): Position {
+  // スクリーン座標をアイソメトリック座標に変換
+  const isoX = Math.floor(
+    ((screenX / TILE_WIDTH) * 2 + (screenY / TILE_HEIGHT) * 2) / 2
+  );
+  const isoY = Math.floor(
+    ((screenY / TILE_HEIGHT) * 2 - (screenX / TILE_WIDTH) * 2) / 2
+  );
+  return { x: isoX, y: isoY };
 }
 
 export function useGameRenderer(
   appRef: React.RefObject<PIXI.Application | null>,
-  gameSystemRef: React.RefObject<GameSystem | null>
+  gameSystemRef: React.RefObject<GameSystem | null>,
+  isAppInitialized: boolean = false
 ) {
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const mapContainerRef = useRef<PIXI.Container | null>(null);
@@ -28,30 +46,39 @@ export function useGameRenderer(
   const moveRangeRef = useRef<PIXI.Graphics[]>([]);
   const isInitializedRef = useRef<boolean>(false);
 
-  // レンダラーの初期化
+  // アプリが初期化されていないなら何もしない
   useEffect(() => {
-    // アプリケーションの初期化を待つ
-    const initInterval = setInterval(() => {
-      const app = appRef.current;
-      if (!app) return;
-      
-      clearInterval(initInterval);
-      
-      // コンテナがすでに初期化されていれば何もしない
-      if (isInitializedRef.current) return;
-      isInitializedRef.current = true;
+    if (!isAppInitialized) return;
 
-      console.log("レンダラーを初期化します");
+    console.log('レンダラー初期化開始');
 
+    const app = appRef.current;
+    if (!app || !app.stage) {
+      console.log('アプリまたはステージが存在しません');
+      return;
+    }
+
+    // すでに初期化されていればスキップ
+    if (isInitializedRef.current) {
+      console.log('レンダラーはすでに初期化されています');
+      return;
+    }
+
+    // 初期化フラグを設定
+    isInitializedRef.current = true;
+
+    try {
       // コンテナの作成
       const mapContainer = new PIXI.Container();
       const unitContainer = new PIXI.Container();
       const overlayContainer = new PIXI.Container();
 
-      // カメラのセットアップ（中央に配置）
+      // カメラのセットアップ（中央に配置、さらに上方に調整）
       const centerX = app.screen.width / 2;
-      const centerY = app.screen.height / 2 - 100; // 少し上に調整
-      
+      const centerY = app.screen.height * 0.3; // 画面の上から30%の位置に配置
+
+      console.log('コンテナ位置設定:', centerX, centerY);
+
       mapContainer.position.set(centerX, centerY);
       unitContainer.position.set(centerX, centerY);
       overlayContainer.position.set(centerX, centerY);
@@ -70,51 +97,88 @@ export function useGameRenderer(
 
       // 初期描画
       renderGameState();
-    }, 100);
+
+      console.log('レンダラー初期化完了');
+    } catch (error) {
+      console.error('レンダラー初期化エラー:', error);
+    }
 
     return () => {
-      clearInterval(initInterval);
-      
       // クリーンアップ処理
       const app = appRef.current;
       if (!app) return;
-      
+
       // イベントリスナーのクリーンアップ
       cleanupEventHandlers();
-      
+
       // コンテナが存在する場合のみ削除
       if (mapContainerRef.current && app.stage) {
         app.stage.removeChild(mapContainerRef.current);
       }
-      
+
       if (unitContainerRef.current && app.stage) {
         app.stage.removeChild(unitContainerRef.current);
       }
-      
+
       if (overlayContainerRef.current && app.stage) {
         app.stage.removeChild(overlayContainerRef.current);
       }
-      
+
       // 参照をクリア
       mapContainerRef.current = null;
       unitContainerRef.current = null;
       overlayContainerRef.current = null;
       isInitializedRef.current = false;
     };
-  }, [appRef]);
+  }, [isAppInitialized, appRef]);
+
+  // ウィンドウリサイズ時のコンテナ位置調整
+  useEffect(() => {
+    if (!isAppInitialized || !isInitializedRef.current) return;
+
+    const updateContainerPositions = () => {
+      const app = appRef.current;
+      if (!app) return;
+
+      const mapContainer = mapContainerRef.current;
+      const unitContainer = unitContainerRef.current;
+      const overlayContainer = overlayContainerRef.current;
+
+      if (mapContainer && unitContainer && overlayContainer) {
+        const centerX = app.screen.width / 2;
+        const centerY = app.screen.height * 0.3; // 画面の上から30%に配置
+
+        mapContainer.position.set(centerX, centerY);
+        unitContainer.position.set(centerX, centerY);
+        overlayContainer.position.set(centerX, centerY);
+
+        console.log('コンテナ位置更新:', centerX, centerY);
+      }
+    };
+
+    // リサイズ監視
+    window.addEventListener('resize', updateContainerPositions);
+
+    // 初期位置設定
+    updateContainerPositions();
+
+    return () => {
+      window.removeEventListener('resize', updateContainerPositions);
+    };
+  }, [isAppInitialized, appRef]);
 
   // ゲーム状態が変更されたときの再描画
   useEffect(() => {
+    if (!isAppInitialized || !isInitializedRef.current) return;
+
     const intervalId = setInterval(() => {
-      if (isInitializedRef.current) {
-        renderGameState();
-      }
+      renderGameState();
     }, 100); // 100ms間隔で再描画
 
     return () => {
       clearInterval(intervalId);
     };
-  }, []);
+  }, [isAppInitialized]);
 
   // イベントハンドラの設定
   function setupEventHandlers() {
@@ -123,7 +187,15 @@ export function useGameRenderer(
 
     overlayContainer.eventMode = 'static';
     overlayContainer.cursor = 'pointer';
-    
+
+    // マップ全体にヒットエリアを追加
+    const hitArea = new PIXI.Graphics();
+    hitArea.beginFill(0xffffff, 0.001); // ほぼ透明
+    hitArea.drawRect(-1000, -1000, 2000, 2000); // 広いエリア
+    hitArea.endFill();
+    overlayContainer.addChild(hitArea);
+
+    // イベントリスナーを設定
     overlayContainer.on('pointerdown', handleMapClick);
   }
 
@@ -141,29 +213,52 @@ export function useGameRenderer(
     const gameSystem = gameSystemRef.current;
     if (!app || !gameSystem || !mapContainerRef.current) return;
 
+    console.log('マップがクリックされました', event.global);
+
     // グローバル座標からコンテナのローカル座標に変換
     const localPos = mapContainerRef.current.toLocal(event.global);
-    
-    // スクリーン座標からアイソメトリック座標への変換（簡易版）
-    const tileX = Math.floor((localPos.x / TILE_WIDTH * 2 + localPos.y / TILE_HEIGHT * 2) / 2);
-    const tileY = Math.floor((localPos.y / TILE_HEIGHT * 2 - localPos.x / TILE_WIDTH * 2) / 2);
-    
-    const clickedPosition: Position = { x: tileX, y: tileY };
+    console.log('ローカル座標:', localPos);
+
+    // スクリーン座標からアイソメトリック座標への変換
+    const position = screenToIso(localPos.x, localPos.y);
+    console.log('変換後の座標:', position);
+
+    const clickedPosition: Position = position;
     const state = gameSystem.getState();
-    
+
+    // 座標がマップ範囲内かチェック
+    if (
+      position.x < 0 ||
+      position.y < 0 ||
+      position.x >= state.map.getWidth() ||
+      position.y >= state.map.getHeight()
+    ) {
+      console.log('クリック位置がマップ範囲外です');
+      return;
+    }
+
     // クリックされた位置のユニットを取得
     const units = state.units;
-    const clickedUnit = units.find(unit => 
-      unit.position.x === clickedPosition.x && unit.position.y === clickedPosition.y
+    const clickedUnit = units.find(
+      (unit) =>
+        unit.position.x === clickedPosition.x &&
+        unit.position.y === clickedPosition.y
     );
 
     if (clickedUnit) {
+      console.log('ユニットが選択されました:', clickedUnit);
       // ユニットが選択された場合
       setSelectedUnitId(clickedUnit.id);
       showMoveRange(clickedUnit.id);
     } else if (selectedUnitId) {
       // 選択されたユニットがあり、空のタイルがクリックされた場合は移動
       if (state.activeUnitId === selectedUnitId) {
+        console.log(
+          'ユニットを移動します:',
+          selectedUnitId,
+          '→',
+          clickedPosition
+        );
         gameSystem.moveUnit(selectedUnitId, clickedPosition);
         setSelectedUnitId(null);
         clearMoveRange();
@@ -182,23 +277,28 @@ export function useGameRenderer(
 
     // 移動可能範囲を取得
     const movePositions = gameSystem.getUnitMoveRange(unitId);
-    
+    console.log('移動可能範囲:', movePositions);
+
     // 移動可能範囲を描画
-    movePositions.forEach(position => {
+    movePositions.forEach((position) => {
       const { x, y } = isoToScreen(position);
-      
+
       const rangeMarker = new PIXI.Graphics();
       rangeMarker.beginFill(0x00ff00, 0.3);
       rangeMarker.lineStyle(1, 0x00ff00, 0.8);
       rangeMarker.drawPolygon([
-        -TILE_WIDTH / 2, 0,
-        0, -TILE_HEIGHT / 2,
-        TILE_WIDTH / 2, 0,
-        0, TILE_HEIGHT / 2
+        -TILE_WIDTH / 2,
+        0,
+        0,
+        -TILE_HEIGHT / 2,
+        TILE_WIDTH / 2,
+        0,
+        0,
+        TILE_HEIGHT / 2,
       ]);
       rangeMarker.endFill();
       rangeMarker.position.set(x, y);
-      
+
       overlayContainer.addChild(rangeMarker);
       moveRangeRef.current.push(rangeMarker);
     });
@@ -209,7 +309,7 @@ export function useGameRenderer(
     const overlayContainer = overlayContainerRef.current;
     if (!overlayContainer) return;
 
-    moveRangeRef.current.forEach(marker => {
+    moveRangeRef.current.forEach((marker) => {
       overlayContainer.removeChild(marker);
       marker.destroy();
     });
@@ -223,7 +323,7 @@ export function useGameRenderer(
     if (!app || !gameSystem) return;
 
     const state = gameSystem.getState();
-    
+
     renderMap(state);
     renderUnits(state);
   }
@@ -234,12 +334,12 @@ export function useGameRenderer(
     if (!mapContainer) return;
 
     const tiles = state.map.getAllTiles();
-    
+
     // タイルの描画
-    tiles.forEach(tile => {
+    tiles.forEach((tile) => {
       const tileKey = `${tile.position.x},${tile.position.y}`;
       let tileGraphic = tilesRef.current.get(tileKey);
-      
+
       if (!tileGraphic) {
         // 新しいタイルを作成
         tileGraphic = new PIXI.Graphics();
@@ -250,41 +350,53 @@ export function useGameRenderer(
       // タイルの座標をアイソメトリックに変換
       const { x, y } = isoToScreen(tile.position, tile.height);
       tileGraphic.position.set(x, y);
-      
+
       // タイルを描画
       tileGraphic.clear();
-      
+
       // タイルの側面（高さに応じて）
       if (tile.height > 0) {
         tileGraphic.beginFill(0x555577);
         tileGraphic.lineStyle(1, 0x333355, 1);
         tileGraphic.drawPolygon([
-          -TILE_WIDTH / 2, 0,
-          -TILE_WIDTH / 2, TILE_HEIGHT_OFFSET * tile.height,
-          0, TILE_HEIGHT / 2 + TILE_HEIGHT_OFFSET * tile.height,
-          0, TILE_HEIGHT / 2
+          -TILE_WIDTH / 2,
+          0,
+          -TILE_WIDTH / 2,
+          TILE_HEIGHT_OFFSET * tile.height,
+          0,
+          TILE_HEIGHT / 2 + TILE_HEIGHT_OFFSET * tile.height,
+          0,
+          TILE_HEIGHT / 2,
         ]);
         tileGraphic.endFill();
 
         tileGraphic.beginFill(0x555577);
         tileGraphic.lineStyle(1, 0x333355, 1);
         tileGraphic.drawPolygon([
-          TILE_WIDTH / 2, 0,
-          TILE_WIDTH / 2, TILE_HEIGHT_OFFSET * tile.height,
-          0, TILE_HEIGHT / 2 + TILE_HEIGHT_OFFSET * tile.height,
-          0, TILE_HEIGHT / 2
+          TILE_WIDTH / 2,
+          0,
+          TILE_WIDTH / 2,
+          TILE_HEIGHT_OFFSET * tile.height,
+          0,
+          TILE_HEIGHT / 2 + TILE_HEIGHT_OFFSET * tile.height,
+          0,
+          TILE_HEIGHT / 2,
         ]);
         tileGraphic.endFill();
       }
-      
+
       // タイルの上面
       tileGraphic.beginFill(tile.passable ? 0x88aaff : 0x884444);
       tileGraphic.lineStyle(1, 0x333355, 1);
       tileGraphic.drawPolygon([
-        -TILE_WIDTH / 2, 0,
-        0, -TILE_HEIGHT / 2,
-        TILE_WIDTH / 2, 0,
-        0, TILE_HEIGHT / 2
+        -TILE_WIDTH / 2,
+        0,
+        0,
+        -TILE_HEIGHT / 2,
+        TILE_WIDTH / 2,
+        0,
+        0,
+        TILE_HEIGHT / 2,
       ]);
       tileGraphic.endFill();
     });
@@ -297,7 +409,7 @@ export function useGameRenderer(
 
     // 現在のユニットをクリア
     unitsRef.current.forEach((graphic, id) => {
-      if (!state.units.some(unit => unit.id === id)) {
+      if (!state.units.some((unit) => unit.id === id)) {
         unitContainer.removeChild(graphic);
         graphic.destroy();
         unitsRef.current.delete(id);
@@ -305,9 +417,9 @@ export function useGameRenderer(
     });
 
     // ユニットの描画
-    state.units.forEach(unit => {
+    state.units.forEach((unit) => {
       let unitGraphic = unitsRef.current.get(unit.id);
-      
+
       if (!unitGraphic) {
         // 新しいユニットを作成
         unitGraphic = new PIXI.Graphics();
@@ -319,39 +431,53 @@ export function useGameRenderer(
       const tile = state.map.getTile(unit.position);
       const height = tile ? tile.height : 0;
       const { x, y } = isoToScreen(unit.position, height);
-      
+
       unitGraphic.position.set(x, y);
-      
+
       // ユニットを描画
       unitGraphic.clear();
-      
+
       // チームによって色を変える
       const teamColor = unit.teamId === 0 ? 0x4444ff : 0xff4444;
-      
+
       // ユニットが選択されているか、行動可能かによって強調表示
       const isSelected = unit.id === selectedUnitId;
       const isActive = unit.id === state.activeUnitId;
-      const borderColor = isSelected ? 0xffff00 : (isActive ? 0x00ffff : 0x000000);
+      const borderColor = isSelected
+        ? 0xffff00
+        : isActive
+        ? 0x00ffff
+        : 0x000000;
       const borderWidth = isSelected || isActive ? 3 : 1;
-      
+
       // ユニットの描画（円形で表現）
       unitGraphic.beginFill(teamColor, 0.8);
       unitGraphic.lineStyle(borderWidth, borderColor, 1);
       unitGraphic.drawCircle(0, -TILE_HEIGHT / 4, TILE_WIDTH / 4);
       unitGraphic.endFill();
-      
+
       // CTゲージの描画
       const ctRatio = unit.stats.ct / 100;
       unitGraphic.beginFill(0xffcc44, 0.8);
       unitGraphic.lineStyle(1, 0x000000, 0.8);
-      unitGraphic.drawRect(-TILE_WIDTH / 5, -TILE_HEIGHT / 2, (TILE_WIDTH / 2.5) * ctRatio, 5);
+      unitGraphic.drawRect(
+        -TILE_WIDTH / 5,
+        -TILE_HEIGHT / 2,
+        (TILE_WIDTH / 2.5) * ctRatio,
+        5
+      );
       unitGraphic.endFill();
 
       // HPバーの描画
       const hpRatio = unit.stats.hp / unit.stats.maxHp;
       unitGraphic.beginFill(0x44ff44, 0.8);
       unitGraphic.lineStyle(1, 0x000000, 0.8);
-      unitGraphic.drawRect(-TILE_WIDTH / 5, -TILE_HEIGHT / 2 + 7, (TILE_WIDTH / 2.5) * hpRatio, 5);
+      unitGraphic.drawRect(
+        -TILE_WIDTH / 5,
+        -TILE_HEIGHT / 2 + 7,
+        (TILE_WIDTH / 2.5) * hpRatio,
+        5
+      );
       unitGraphic.endFill();
     });
   }

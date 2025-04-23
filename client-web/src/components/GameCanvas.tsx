@@ -10,67 +10,129 @@ const GameCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<PIXI.Application | null>(null);
   const gameSystemRef = useRef<GameSystem | null>(null);
+  const [appInitialized, setAppInitialized] = useState(false);
   const [_, setForceUpdate] = useState(0);
 
   // ゲームの初期化
   useEffect(() => {
+    // すでに初期化されている場合は何もしない
+    if (appRef.current) return;
+
+    // 要素がマウントされているか確認
     if (!canvasRef.current) return;
 
-    // PixiJSアプリケーションの作成 - v7対応
-    const app = new PIXI.Application({
-      backgroundColor: 0x0a0a23,
-      resizeTo: canvasRef.current,
-    });
-    
-    // v7では従来通りcanvasを追加（型キャストして対応）
-    canvasRef.current.appendChild(app.view as unknown as Node);
-    appRef.current = app;
-    
-    // ゲームシステムの初期化
-    const gameSystem = new GameSystem(13, 13);
-    gameSystem.setupInitialState();
-    gameSystemRef.current = gameSystem;
+    console.log('ゲーム初期化開始');
+
+    try {
+      // 基本的なPixiJSアプリケーションを作成（v7対応）
+      const app = new PIXI.Application({
+        backgroundColor: 0x0a0a23,
+        width: 800, // 固定サイズで開始
+        height: 600,
+        antialias: true,
+      });
+
+      // canvasをDOM要素に追加
+      const canvasElement = app.view as unknown as HTMLCanvasElement;
+      canvasRef.current.innerHTML = ''; // 念のため既存要素をクリア
+      canvasRef.current.appendChild(canvasElement);
+
+      // canvasにスタイルを適用
+      canvasElement.style.display = 'block';
+      canvasElement.style.width = '100%';
+      canvasElement.style.height = '100%';
+
+      // ゲームシステムの初期化
+      const gameSystem = new GameSystem(13, 13);
+      gameSystem.setupInitialState();
+
+      // 参照を保存
+      appRef.current = app;
+      gameSystemRef.current = gameSystem;
+
+      console.log('ゲーム初期化完了');
+      setAppInitialized(true);
+    } catch (error) {
+      console.error('ゲーム初期化エラー:', error);
+    }
 
     return () => {
-      app.destroy(true);
-      // クリーンアップもv7用に修正（型キャストして対応）
-      if (canvasRef.current && app.view && canvasRef.current.contains(app.view as unknown as Node)) {
-        canvasRef.current.removeChild(app.view as unknown as Node);
+      // クリーンアップ処理
+      if (appRef.current) {
+        appRef.current.destroy(true);
+        appRef.current = null;
       }
     };
   }, []);
 
+  // ウィンドウリサイズのハンドリング
+  useEffect(() => {
+    if (!appInitialized) return;
+
+    const handleResize = () => {
+      if (!canvasRef.current || !appRef.current) return;
+
+      try {
+        // 親要素のサイズを取得
+        const width = canvasRef.current.clientWidth;
+        const height = canvasRef.current.clientHeight;
+
+        console.log('リサイズ:', width, height);
+
+        // レンダラーのリサイズ（安全チェック付き）
+        if (appRef.current.renderer) {
+          appRef.current.renderer.resize(width, height);
+        }
+
+        // 強制更新をトリガー
+        setForceUpdate((prev) => prev + 1);
+      } catch (error) {
+        console.error('リサイズエラー:', error);
+      }
+    };
+
+    // リサイズイベントリスナーを設定
+    window.addEventListener('resize', handleResize);
+
+    // 初期リサイズを実行
+    handleResize();
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [appInitialized]);
+
   // ゲーム状態更新時の強制再レンダリング
   const handleStateUpdate = () => {
-    setForceUpdate(prev => prev + 1);
+    setForceUpdate((prev) => prev + 1);
   };
 
   // サーバー接続のセットアップ
-  const { connectionState } = useGameConnection(gameSystemRef, handleStateUpdate);
+  const { connectionState } = useGameConnection(
+    gameSystemRef,
+    handleStateUpdate
+  );
 
-  // ゲームレンダラーのセットアップ
-  const { selectedUnitId } = useGameRenderer(appRef, gameSystemRef);
+  // ゲームレンダラーのセットアップ（アプリ初期化後のみ）
+  const { selectedUnitId } = useGameRenderer(
+    appRef,
+    gameSystemRef,
+    appInitialized
+  );
 
   // ゲームループのセットアップ
   useGameLoop(gameSystemRef);
 
   return (
-    <div className="w-full h-full relative">
-      <div ref={canvasRef} className="w-full h-full" />
-      
-      {connectionState.teamId !== null && (
-        <div className="absolute top-4 right-4 bg-gray-800 p-2 rounded text-white">
-          チーム: {connectionState.teamId === 0 ? '青' : '赤'}
-        </div>
-      )}
-      
-      {connectionState.error && (
-        <div className="absolute top-4 left-4 bg-red-800 p-2 rounded text-white">
-          {connectionState.error}
-        </div>
-      )}
-      
-      <GameUI gameSystem={gameSystemRef.current} selectedUnitId={selectedUnitId} />
+    <div className='w-full h-full relative'>
+      <div ref={canvasRef} className='w-full h-full absolute inset-0' />
+
+      {/* GameUI に connectionState を渡す */}
+      <GameUI
+        gameSystem={gameSystemRef.current}
+        selectedUnitId={selectedUnitId}
+        connectionState={connectionState}
+      />
     </div>
   );
 };
