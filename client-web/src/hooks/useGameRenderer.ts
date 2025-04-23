@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { GameSystem, BattleState, Position } from 'game-logic';
+import { GameConnectionState } from './useGameConnection';
 
 // タイルのサイズ定義
 const TILE_WIDTH = 64;
@@ -35,9 +36,12 @@ function screenToIso(screenX: number, screenY: number): Position {
 export function useGameRenderer(
   appRef: React.RefObject<PIXI.Application | null>,
   gameSystemRef: React.RefObject<GameSystem | null>,
-  isAppInitialized: boolean = false
+  isAppInitialized: boolean = false,
+  connectionState?: GameConnectionState,
+  moveUnit?: (unitId: string, targetPosition: Position) => void
 ) {
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
+  const selectedUnitIdRef = useRef<string | null>(null);
   const mapContainerRef = useRef<PIXI.Container | null>(null);
   const unitContainerRef = useRef<PIXI.Container | null>(null);
   const overlayContainerRef = useRef<PIXI.Container | null>(null);
@@ -45,6 +49,24 @@ export function useGameRenderer(
   const unitsRef = useRef<Map<string, PIXI.Graphics>>(new Map());
   const moveRangeRef = useRef<PIXI.Graphics[]>([]);
   const isInitializedRef = useRef<boolean>(false);
+  // 接続状態とmoveUnitへの参照を追加
+  const connectionStateRef = useRef(connectionState);
+  const moveUnitRef = useRef(moveUnit);
+
+  // 値が変わったらrefを更新
+  useEffect(() => {
+    connectionStateRef.current = connectionState;
+  }, [connectionState]);
+
+  // 状態が変わったら参照も更新
+  useEffect(() => {
+    console.log('selectedUnitId が変更されました:', selectedUnitId);
+    selectedUnitIdRef.current = selectedUnitId;
+  }, [selectedUnitId]);
+
+  useEffect(() => {
+    moveUnitRef.current = moveUnit;
+  }, [moveUnit]);
 
   // アプリが初期化されていないなら何もしない
   useEffect(() => {
@@ -213,15 +235,19 @@ export function useGameRenderer(
     const gameSystem = gameSystemRef.current;
     if (!app || !gameSystem || !mapContainerRef.current) return;
 
-    console.log('マップがクリックされました', event.global);
+    // 現在の状態を確認
+    console.log(
+      'クリック時の selectedUnitId (ref):',
+      selectedUnitIdRef.current
+    );
+    console.log('クリック時の selectedUnitId (state):', selectedUnitId);
 
     // グローバル座標からコンテナのローカル座標に変換
     const localPos = mapContainerRef.current.toLocal(event.global);
-    console.log('ローカル座標:', localPos);
 
     // スクリーン座標からアイソメトリック座標への変換
     const position = screenToIso(localPos.x, localPos.y);
-    console.log('変換後の座標:', position);
+    console.log('クリック座標:', position);
 
     const clickedPosition: Position = position;
     const state = gameSystem.getState();
@@ -245,29 +271,79 @@ export function useGameRenderer(
         unit.position.y === clickedPosition.y
     );
 
+    // --- ユニットクリックのロジック ---
     if (clickedUnit) {
-      console.log('ユニットが選択されました:', clickedUnit);
-      // ユニットが選択された場合
+      console.log('ユニットが選択されました:', clickedUnit.id);
+      // ユニットが選択された場合、状態を更新
       setSelectedUnitId(clickedUnit.id);
+      // 移動範囲を表示（選択状態をrefから直接取得）
       showMoveRange(clickedUnit.id);
-    } else if (selectedUnitId) {
-      // 選択されたユニットがあり、空のタイルがクリックされた場合は移動
-      if (state.activeUnitId === selectedUnitId) {
-        console.log(
-          'ユニットを移動します:',
-          selectedUnitId,
-          '→',
-          clickedPosition
+    }
+    // --- 空きマスクリックのロジック ---
+    else {
+      // 現在の選択状態をrefから安全に取得
+      const currentSelectedId = selectedUnitIdRef.current;
+      console.log('空きマスクリック時の選択ユニット:', currentSelectedId);
+
+      if (currentSelectedId) {
+        // 選択中のユニットとアクティブユニットをチェック
+        const selectedUnit = units.find(
+          (unit) => unit.id === currentSelectedId
         );
-        gameSystem.moveUnit(selectedUnitId, clickedPosition);
-        setSelectedUnitId(null);
-        clearMoveRange();
+        const isActiveUnit =
+          selectedUnit && state.activeUnitId === currentSelectedId;
+
+        if (!selectedUnit) {
+          console.log('選択されたユニットが見つかりません');
+          return;
+        }
+
+        // 移動可能範囲をチェック
+        const movePositions = gameSystem.getUnitMoveRange(currentSelectedId);
+        const canMoveToPosition = movePositions.some(
+          (pos) => pos.x === clickedPosition.x && pos.y === clickedPosition.y
+        );
+
+        console.log('アクティブユニット?:', isActiveUnit);
+        console.log('移動可能?:', canMoveToPosition);
+
+        if (isActiveUnit && canMoveToPosition) {
+          console.log(
+            `ユニット ${currentSelectedId} を移動します:`,
+            clickedPosition
+          );
+
+          try {
+            // ユニット移動を実行
+            gameSystem.moveUnit(currentSelectedId, clickedPosition);
+            console.log('移動成功');
+
+            // 移動が成功したら選択状態をクリア
+            setSelectedUnitId(null);
+            clearMoveRange();
+          } catch (error) {
+            console.error('移動エラー:', error);
+          }
+        } else {
+          if (!isActiveUnit) {
+            console.log('このユニットは現在行動できません');
+          }
+          if (!canMoveToPosition) {
+            console.log('選択された位置は移動可能範囲外です');
+          }
+        }
       }
     }
   }
 
+  // selectedUnitIdの変更を監視
+  useEffect(() => {
+    console.log('selectedUnitId が変更されました:', selectedUnitId);
+  }, [selectedUnitId]);
+
   // 移動可能範囲の表示
   function showMoveRange(unitId: string) {
+    console.log('移動可能範囲を表示:', unitId);
     const gameSystem = gameSystemRef.current;
     const overlayContainer = overlayContainerRef.current;
     if (!gameSystem || !overlayContainer) return;
@@ -281,11 +357,13 @@ export function useGameRenderer(
 
     // 移動可能範囲を描画
     movePositions.forEach((position) => {
-      const { x, y } = isoToScreen(position);
+      const tile = gameSystem.getState().map.getTile(position);
+      const height = tile ? tile.height : 0;
+      const { x, y } = isoToScreen(position, height);
 
       const rangeMarker = new PIXI.Graphics();
       rangeMarker.beginFill(0x00ff00, 0.3);
-      rangeMarker.lineStyle(1, 0x00ff00, 0.8);
+      rangeMarker.lineStyle(2, 0x00ff00, 0.8);
       rangeMarker.drawPolygon([
         -TILE_WIDTH / 2,
         0,

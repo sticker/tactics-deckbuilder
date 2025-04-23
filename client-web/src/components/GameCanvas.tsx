@@ -108,7 +108,7 @@ const GameCanvas: React.FC = () => {
   };
 
   // サーバー接続のセットアップ
-  const { connectionState } = useGameConnection(
+  const { connectionState, moveUnit } = useGameConnection(
     gameSystemRef,
     handleStateUpdate
   );
@@ -117,11 +117,18 @@ const GameCanvas: React.FC = () => {
   const { selectedUnitId } = useGameRenderer(
     appRef,
     gameSystemRef,
-    appInitialized
+    appInitialized,
+    connectionState,
+    moveUnit
   );
 
   // ゲームループのセットアップ
   useGameLoop(gameSystemRef);
+
+  // selectedUnitIdの状態変化を監視するデバッグログ
+  useEffect(() => {
+    console.log('GameCanvas: selectedUnitId 更新:', selectedUnitId);
+  }, [selectedUnitId]);
 
   return (
     <div className='w-full h-full relative'>

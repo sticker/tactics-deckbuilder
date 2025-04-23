@@ -1,5 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { GameSystem } from 'game-logic';
+
+// Declare the custom window property
+declare global {
+  interface Window {
+    showGameNotification?: (message: string) => void;
+  }
+}
 
 interface GameUIProps {
   gameSystem: GameSystem | null;
@@ -21,9 +28,39 @@ const GameUI: React.FC<GameUIProps> = ({
   const state = gameSystem.getState();
   const selectedUnit = state.units.find((unit) => unit.id === selectedUnitId);
   const activeUnit = state.units.find((unit) => unit.id === state.activeUnitId);
+  const [notification, setNotification] = useState<string | null>(null);
+
+  // 通知メッセージの表示
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => {
+        setNotification(null);
+      }, 3000); // 3秒後に消える
+
+      return () => clearTimeout(timer);
+    }
+  }, [notification]);
+
+  // 通知表示関数をグローバルに公開
+  useEffect(() => {
+    window.showGameNotification = (message: string) => {
+      setNotification(message);
+    };
+
+    return () => {
+      delete window.showGameNotification;
+    };
+  }, []);
 
   return (
     <>
+      {/* 通知メッセージ */}
+      {notification && (
+        <div className='absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gray-900 bg-opacity-90 text-white px-5 py-3 rounded-md shadow-lg z-20 text-center'>
+          {notification}
+        </div>
+      )}
+
       {/* 上部バー（左側） - ターン情報 */}
       <div className='absolute top-0 left-0 bg-gray-900 bg-opacity-90 text-white px-3 py-1 flex items-center z-10 rounded-br-md shadow-md'>
         <div className='flex items-center space-x-3'>
