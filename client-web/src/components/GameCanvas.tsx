@@ -145,10 +145,19 @@ const GameCanvas: React.FC = () => {
           }アクションを実行しました`
         );
       }
+    } else {
+      if (window.showGameNotification) {
+        window.showGameNotification('アクションの実行に失敗しました');
+      }
     }
 
     // 状態をリセット
     setCurrentActionType(null);
+    
+    // アクション実行後に強制的に再レンダリング
+    setTimeout(() => {
+      handleStateUpdate();
+    }, 100);
   };
 
   // ゲームレンダラーのセットアップ（アプリ初期化後のみ）

@@ -1,11 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import {
-  GameSystem,
-  BattleState,
-  Position,
-  Unit,
-} from 'game-logic';
+import { GameSystem, BattleState, Position, Unit } from 'game-logic';
 import { GameConnectionState } from './useGameConnection';
 
 // タイルのサイズ定義
@@ -68,7 +63,11 @@ export function useGameRenderer(
   connectionState?: GameConnectionState,
   moveUnit?: (unitId: string, targetPosition: Position) => void,
   currentActionType?: string | null,
-  executeAction?: (sourceUnitId: string, targetUnitId: string, targetPosition: Position) => void
+  executeAction?: (
+    sourceUnitId: string,
+    targetUnitId: string,
+    targetPosition: Position
+  ) => void
 ) {
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const selectedUnitIdRef = useRef<string | null>(null);
@@ -326,6 +325,7 @@ export function useGameRenderer(
       if (selectedUnitIdRef.current === clickedUnit.id) {
         console.log('ユニット選択を解除します');
         clearMoveRange();
+        clearActionRange(); // アクション範囲も消去
         setSelectedUnitId(null);
         return;
       }
@@ -365,6 +365,20 @@ export function useGameRenderer(
             return;
           }
 
+          // ターゲットが範囲内にあるか確認
+          const isInRange = checkActionRange(
+            sourceUnit.position,
+            clickedUnit.position,
+            currentActionType.startsWith('attack') ? 1 : 2 // 攻撃は範囲1、回復は範囲2
+          );
+
+          if (!isInRange) {
+            if (window.showGameNotification) {
+              window.showGameNotification('対象が範囲外です');
+            }
+            return;
+          }
+
           // アクション実行
           if (executeAction) {
             executeAction(sourceUnit.id, clickedUnit.id, clickedUnit.position);
@@ -379,6 +393,7 @@ export function useGameRenderer(
       }
       // 既存の選択をクリア
       clearMoveRange();
+      clearActionRange(); // アクション範囲も消去
       setSelectedUnitId(clickedUnit.id);
       showMoveRange(clickedUnit.id);
       return;
@@ -436,71 +451,93 @@ export function useGameRenderer(
           return;
         }
 
-        // 移動可能範囲をチェック
-        const movePositions = gameSystem.getUnitMoveRange(currentSelectedId);
-        const canMoveToPosition = movePositions.some(
-          (pos) => pos.x === clickedPosition.x && pos.y === clickedPosition.y
-        );
-
-        console.log('アクティブユニット?:', isActiveUnit);
-        console.log('移動可能?:', canMoveToPosition);
-
-        // 移動処理を行う箇所を修正
-        if (isActiveUnit && canMoveToPosition) {
-          console.log(
-            `ユニット ${currentSelectedId} を移動します:`,
-            clickedPosition
+        console.log(currentActionType);
+        // 現在のアクションタイプをチェック
+        if (currentActionType === 'move' || currentActionType === null) {
+          console.log('移動アクションが選択されています');
+          // 移動アクションの場合
+          // 移動可能範囲をチェック
+          const movePositions = gameSystem.getUnitMoveRange(currentSelectedId);
+          const canMoveToPosition = movePositions.some(
+            (pos) => pos.x === clickedPosition.x && pos.y === clickedPosition.y
           );
 
-          try {
-            // ユニット移動を実行する前に、フラグを設定して選択解除中であることを記録
-            const movingUnitId = currentSelectedId;
+          console.log('アクティブユニット?:', isActiveUnit);
+          console.log('移動可能?:', canMoveToPosition);
 
-            // まず選択状態をクリア（重要: 移動前に行う）
-            setSelectedUnitId(null);
-            clearMoveRange();
+          // 移動処理を行う箇所を修正
+          if (isActiveUnit && canMoveToPosition) {
+            console.log(
+              `ユニット ${currentSelectedId} を移動します:`,
+              clickedPosition
+            );
 
-            // 少し遅延させてから移動処理を実行（重要）
-            setTimeout(() => {
-              const success = gameSystem.moveUnit(
-                movingUnitId,
-                clickedPosition
-              );
-              if (success) {
-                console.log('移動成功');
+            try {
+              // ユニット移動を実行する前に、フラグを設定して選択解除中であることを記録
+              const movingUnitId = currentSelectedId;
 
-                // 選択状態が再度設定されないように防止策を追加
-                // （この時点で選択状態は既にnullになっているはず）
-                if (selectedUnitIdRef.current === movingUnitId) {
-                  setSelectedUnitId(null);
+              // まず選択状態をクリア（重要: 移動前に行う）
+              setSelectedUnitId(null);
+              clearMoveRange();
+              clearActionRange();
+
+              // 少し遅延させてから移動処理を実行（重要）
+              setTimeout(() => {
+                const success = gameSystem.moveUnit(
+                  movingUnitId,
+                  clickedPosition
+                );
+                if (success) {
+                  console.log('移動成功');
+
+                  // 選択状態が再度設定されないように防止策を追加
+                  // （この時点で選択状態は既にnullになっているはず）
+                  if (selectedUnitIdRef.current === movingUnitId) {
+                    setSelectedUnitId(null);
+                  }
                 }
-              }
-            }, 50);
-          } catch (error) {
-            console.error('移動エラー:', error);
+              }, 50);
+            } catch (error) {
+              console.error('移動エラー:', error);
+            }
+          } else {
+            // 移動できない場合は選択解除
+            if (!isActiveUnit) {
+              console.log('このユニットは現在行動できません');
+            }
+            if (!canMoveToPosition) {
+              console.log('選択された位置は移動可能範囲外です');
+            }
+
+            // 選択を解除
+            clearMoveRange();
+            clearActionRange();
+            setSelectedUnitId(null);
           }
         } else {
-          // 移動できない場合は選択解除
-          if (!isActiveUnit) {
-            console.log('このユニットは現在行動できません');
-          }
-          if (!canMoveToPosition) {
-            console.log('選択された位置は移動可能範囲外です');
-          }
-
-          // 選択を解除
+          // 移動以外のアクションの場合、クリックで選択解除
           clearMoveRange();
+          clearActionRange();
           setSelectedUnitId(null);
         }
-      } else if (moveRangeRef.current.length > 0) {
-        // 選択されたユニットがない状態でもし移動範囲表示が残っていれば消去
+      } else if (
+        moveRangeRef.current.length > 0 ||
+        actionRangeRef.current.length > 0
+      ) {
+        // 選択されたユニットがない状態でもし範囲表示が残っていれば消去
         clearMoveRange();
+        clearActionRange();
       }
     } else {
       console.log('クリック位置がマップ範囲外です');
       // マップ範囲外をクリックした場合も選択解除
-      if (selectedUnitIdRef.current || moveRangeRef.current.length > 0) {
+      if (
+        selectedUnitIdRef.current ||
+        moveRangeRef.current.length > 0 ||
+        actionRangeRef.current.length > 0
+      ) {
         clearMoveRange();
+        clearActionRange();
         setSelectedUnitId(null);
       }
     }
@@ -766,6 +803,18 @@ export function useGameRenderer(
     });
   }
 
+  // マンハッタン距離でアクション範囲をチェックする関数
+  function checkActionRange(
+    sourcePosition: Position,
+    targetPosition: Position,
+    range: number
+  ): boolean {
+    const distance =
+      Math.abs(sourcePosition.x - targetPosition.x) +
+      Math.abs(sourcePosition.y - targetPosition.y);
+    return distance <= range && distance > 0;
+  }
+
   // アクション範囲表示関数
   function showActionRange(
     unitId: string,
@@ -779,6 +828,7 @@ export function useGameRenderer(
 
     // 既存の範囲表示をクリア
     clearActionRange();
+    clearMoveRange(); // 移動範囲も消去
 
     // アクション範囲の色
     const fillColor = actionType === 'attack' ? 0xff0000 : 0x00ff00; // 赤または緑
@@ -822,7 +872,8 @@ export function useGameRenderer(
           } else if (
             actionType === 'heal' &&
             targetUnit &&
-            targetUnit.teamId === unit.teamId
+            targetUnit.teamId === unit.teamId &&
+            targetUnit.id !== unit.id // 自分自身は除外
           ) {
             shouldDisplay = true;
           }

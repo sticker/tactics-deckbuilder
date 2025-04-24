@@ -6,7 +6,7 @@ import {
   moveUnitAction,
   getUnitMoveRange,
 } from '../models/BattleState';
-import { createUnit, JobType, resetUnitCT } from '../models/Unit';
+import { createUnit, JobType } from '../models/Unit';
 import { Position } from '../models/Position';
 
 export class GameSystem {
