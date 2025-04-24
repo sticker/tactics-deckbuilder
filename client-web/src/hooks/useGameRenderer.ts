@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { GameSystem, BattleState, Position } from 'game-logic';
+import { GameSystem, BattleState, Position, Unit } from 'game-logic';
 import { GameConnectionState } from './useGameConnection';
 
 // タイルのサイズ定義
@@ -23,14 +23,37 @@ function isoToScreen(
 
 // スクリーン座標からアイソメトリック座標への変換
 function screenToIso(screenX: number, screenY: number): Position {
-  // スクリーン座標をアイソメトリック座標に変換
+  // タイルの菱形形状を考慮した計算式に修正
   const isoX = Math.floor(
-    ((screenX / TILE_WIDTH) * 2 + (screenY / TILE_HEIGHT) * 2) / 2
+    (screenX / (TILE_WIDTH / 2) + screenY / (TILE_HEIGHT / 2)) / 2
   );
   const isoY = Math.floor(
-    ((screenY / TILE_HEIGHT) * 2 - (screenX / TILE_WIDTH) * 2) / 2
+    (screenY / (TILE_HEIGHT / 2) - screenX / (TILE_WIDTH / 2)) / 2
   );
   return { x: isoX, y: isoY };
+}
+
+function isTileHit(
+  screenX: number,
+  screenY: number,
+  tileX: number,
+  tileY: number,
+  tileHeight: number
+): boolean {
+  // タイルの中心座標を計算
+  const { x: centerX, y: centerY } = isoToScreen(
+    { x: tileX, y: tileY },
+    tileHeight
+  );
+
+  // クリック点とタイル中心との差分
+  const dx = screenX - centerX;
+  const dy = screenY - centerY;
+
+  // 菱形の判定を行う（アイソメトリック座標系では菱形になる）
+  return (
+    Math.abs(dx / (TILE_WIDTH / 2)) + Math.abs(dy / (TILE_HEIGHT / 2)) <= 1
+  );
 }
 
 export function useGameRenderer(
@@ -210,15 +233,61 @@ export function useGameRenderer(
     overlayContainer.eventMode = 'static';
     overlayContainer.cursor = 'pointer';
 
-    // マップ全体にヒットエリアを追加
+    // ヒットエリアを拡大して全体をカバー
     const hitArea = new PIXI.Graphics();
     hitArea.beginFill(0xffffff, 0.001); // ほぼ透明
-    hitArea.drawRect(-1000, -1000, 2000, 2000); // 広いエリア
+    hitArea.drawRect(-2000, -2000, 4000, 4000); // 十分な大きさ
     hitArea.endFill();
     overlayContainer.addChild(hitArea);
 
     // イベントリスナーを設定
     overlayContainer.on('pointerdown', handleMapClick);
+
+    // ホバーイベントも設定
+    overlayContainer.on('pointerdown', handleMapClick);
+    overlayContainer.on('pointermove', handleMouseMove);
+  }
+
+  // マウスホバー処理
+  function handleMouseMove(event: PIXI.FederatedPointerEvent) {
+    const app = appRef.current;
+    const gameSystem = gameSystemRef.current;
+    if (!app || !gameSystem || !mapContainerRef.current) return;
+
+    const localPos = mapContainerRef.current.toLocal(event.global);
+
+    // ユニット上にマウスがあるかチェック
+    const unitUnderMouse = findUnitUnderClick(
+      localPos.x,
+      localPos.y,
+      gameSystem.getState()
+    );
+
+    // ユニット上ならポインタをカーソルに変更
+    if (unitUnderMouse) {
+      overlayContainerRef.current!.cursor = 'pointer';
+    } else {
+      // タイル上なら選択可能かどうかでカーソルを変更
+      const position = screenToIso(localPos.x, localPos.y);
+      if (isValidTilePosition(position, gameSystem.getState())) {
+        overlayContainerRef.current!.cursor = 'pointer';
+      } else {
+        overlayContainerRef.current!.cursor = 'default';
+      }
+    }
+  }
+
+  // タイル位置が有効かどうかをチェック
+  function isValidTilePosition(
+    position: Position,
+    state: BattleState
+  ): boolean {
+    return (
+      position.x >= 0 &&
+      position.y >= 0 &&
+      position.x < state.map.getWidth() &&
+      position.y < state.map.getHeight()
+    );
   }
 
   // イベントハンドラのクリーンアップ
@@ -235,59 +304,73 @@ export function useGameRenderer(
     const gameSystem = gameSystemRef.current;
     if (!app || !gameSystem || !mapContainerRef.current) return;
 
-    // 現在の状態を確認
-    console.log(
-      'クリック時の selectedUnitId (ref):',
-      selectedUnitIdRef.current
-    );
-    console.log('クリック時の selectedUnitId (state):', selectedUnitId);
-
     // グローバル座標からコンテナのローカル座標に変換
     const localPos = mapContainerRef.current.toLocal(event.global);
 
-    // スクリーン座標からアイソメトリック座標への変換
-    const position = screenToIso(localPos.x, localPos.y);
-    console.log('クリック座標:', position);
+    // 1. まずユニットのクリック判定
+    const clickedUnit = findUnitUnderClick(
+      localPos.x,
+      localPos.y,
+      gameSystem.getState()
+    );
 
-    const clickedPosition: Position = position;
-    const state = gameSystem.getState();
+    if (clickedUnit) {
+      // 既に選択されているユニットを再度クリックした場合は選択解除
+      if (selectedUnitIdRef.current === clickedUnit.id) {
+        console.log('ユニット選択を解除します');
+        clearMoveRange();
+        setSelectedUnitId(null);
+        return;
+      }
 
-    // 座標がマップ範囲内かチェック
-    if (
-      position.x < 0 ||
-      position.y < 0 ||
-      position.x >= state.map.getWidth() ||
-      position.y >= state.map.getHeight()
-    ) {
-      console.log('クリック位置がマップ範囲外です');
+      console.log('ユニットが選択されました:', clickedUnit.id);
+      // 既存の選択をクリア
+      clearMoveRange();
+      setSelectedUnitId(clickedUnit.id);
+      showMoveRange(clickedUnit.id);
       return;
     }
 
-    // クリックされた位置のユニットを取得
-    const units = state.units;
-    const clickedUnit = units.find(
-      (unit) =>
-        unit.position.x === clickedPosition.x &&
-        unit.position.y === clickedPosition.y
-    );
+    // 2. ユニットがクリックされていない場合、タイルのクリック判定を行う
+    // 全タイルに対してクリック判定を行い、最も近いタイルを選択
+    const state = gameSystem.getState();
+    const tiles = state.map.getAllTiles();
 
-    // --- ユニットクリックのロジック ---
-    if (clickedUnit) {
-      console.log('ユニットが選択されました:', clickedUnit.id);
-      // ユニットが選択された場合、状態を更新
-      setSelectedUnitId(clickedUnit.id);
-      // 移動範囲を表示（選択状態をrefから直接取得）
-      showMoveRange(clickedUnit.id);
+    let closestTile = null;
+    let closestDistance = Number.MAX_VALUE;
+
+    for (const tile of tiles) {
+      const { x: tileX, y: tileY } = isoToScreen(tile.position, tile.height);
+      const dx = localPos.x - tileX;
+      const dy = localPos.y - tileY;
+      const distance = dx * dx + dy * dy;
+
+      if (
+        distance < closestDistance &&
+        isTileHit(
+          localPos.x,
+          localPos.y,
+          tile.position.x,
+          tile.position.y,
+          tile.height
+        )
+      ) {
+        closestDistance = distance;
+        closestTile = tile;
+      }
     }
-    // --- 空きマスクリックのロジック ---
-    else {
+
+    if (closestTile) {
+      console.log('クリックされたタイル:', closestTile.position);
+      const clickedPosition: Position = closestTile.position;
+
       // 現在の選択状態をrefから安全に取得
       const currentSelectedId = selectedUnitIdRef.current;
       console.log('空きマスクリック時の選択ユニット:', currentSelectedId);
 
       if (currentSelectedId) {
         // 選択中のユニットとアクティブユニットをチェック
-        const selectedUnit = units.find(
+        const selectedUnit = state.units.find(
           (unit) => unit.id === currentSelectedId
         );
         const isActiveUnit =
@@ -295,6 +378,8 @@ export function useGameRenderer(
 
         if (!selectedUnit) {
           console.log('選択されたユニットが見つかりません');
+          clearMoveRange();
+          setSelectedUnitId(null);
           return;
         }
 
@@ -307,6 +392,7 @@ export function useGameRenderer(
         console.log('アクティブユニット?:', isActiveUnit);
         console.log('移動可能?:', canMoveToPosition);
 
+        // 移動処理を行う箇所を修正
         if (isActiveUnit && canMoveToPosition) {
           console.log(
             `ユニット ${currentSelectedId} を移動します:`,
@@ -314,26 +400,78 @@ export function useGameRenderer(
           );
 
           try {
-            // ユニット移動を実行
-            gameSystem.moveUnit(currentSelectedId, clickedPosition);
-            console.log('移動成功');
+            // ユニット移動を実行する前に、フラグを設定して選択解除中であることを記録
+            const movingUnitId = currentSelectedId;
 
-            // 移動が成功したら選択状態をクリア
+            // まず選択状態をクリア（重要: 移動前に行う）
             setSelectedUnitId(null);
             clearMoveRange();
+
+            // 少し遅延させてから移動処理を実行（重要）
+            setTimeout(() => {
+              const success = gameSystem.moveUnit(
+                movingUnitId,
+                clickedPosition
+              );
+              if (success) {
+                console.log('移動成功');
+
+                // 選択状態が再度設定されないように防止策を追加
+                // （この時点で選択状態は既にnullになっているはず）
+                if (selectedUnitIdRef.current === movingUnitId) {
+                  setSelectedUnitId(null);
+                }
+              }
+            }, 50);
           } catch (error) {
             console.error('移動エラー:', error);
           }
         } else {
+          // 移動できない場合は選択解除
           if (!isActiveUnit) {
             console.log('このユニットは現在行動できません');
           }
           if (!canMoveToPosition) {
             console.log('選択された位置は移動可能範囲外です');
           }
+
+          // 選択を解除
+          clearMoveRange();
+          setSelectedUnitId(null);
         }
+      } else if (moveRangeRef.current.length > 0) {
+        // 選択されたユニットがない状態でもし移動範囲表示が残っていれば消去
+        clearMoveRange();
+      }
+    } else {
+      console.log('クリック位置がマップ範囲外です');
+      // マップ範囲外をクリックした場合も選択解除
+      if (selectedUnitIdRef.current || moveRangeRef.current.length > 0) {
+        clearMoveRange();
+        setSelectedUnitId(null);
       }
     }
+  }
+
+  function findUnitUnderClick(
+    x: number,
+    y: number,
+    state: BattleState
+  ): Unit | undefined {
+    // 各ユニットに対してクリック判定
+    return state.units.find((unit) => {
+      const tile = state.map.getTile(unit.position);
+      const height = tile ? tile.height : 0;
+      const { x: unitX, y: unitY } = isoToScreen(unit.position, height);
+
+      // ユニットの表示サイズを考慮した判定エリア
+      const hitRadius = TILE_WIDTH / 3; // ユニットの当たり判定サイズ
+      const dx = x - unitX;
+      const dy = y - unitY + TILE_HEIGHT / 4; // 少し上方向にオフセット
+
+      // 円形の当たり判定
+      return dx * dx + dy * dy <= hitRadius * hitRadius;
+    });
   }
 
   // selectedUnitIdの変更を監視
@@ -351,6 +489,14 @@ export function useGameRenderer(
     // 以前の移動範囲表示をクリア
     clearMoveRange();
 
+    // ユニットがアクティブ（移動可能）かどうか判定
+    const state = gameSystem.getState();
+    const isActive = state.activeUnitId === unitId;
+
+    // 色を選択：アクティブなら緑、非アクティブならオレンジ
+    const fillColor = isActive ? 0x00ff00 : 0xff9900; // 緑 or オレンジ
+    const lineColor = isActive ? 0x00ff00 : 0xff9900; // 緑 or オレンジ
+
     // 移動可能範囲を取得
     const movePositions = gameSystem.getUnitMoveRange(unitId);
     console.log('移動可能範囲:', movePositions);
@@ -362,8 +508,8 @@ export function useGameRenderer(
       const { x, y } = isoToScreen(position, height);
 
       const rangeMarker = new PIXI.Graphics();
-      rangeMarker.beginFill(0x00ff00, 0.3);
-      rangeMarker.lineStyle(2, 0x00ff00, 0.8);
+      rangeMarker.beginFill(fillColor, 0.3); // 色を変数に置き換え
+      rangeMarker.lineStyle(2, lineColor, 0.8); // 色を変数に置き換え
       rangeMarker.drawPolygon([
         -TILE_WIDTH / 2,
         0,
@@ -380,6 +526,13 @@ export function useGameRenderer(
       overlayContainer.addChild(rangeMarker);
       moveRangeRef.current.push(rangeMarker);
     });
+
+    // ユニットが非アクティブな場合、通知を表示
+    if (!isActive && movePositions.length > 0) {
+      if (window.showGameNotification) {
+        window.showGameNotification('このユニットはまだ行動できません');
+      }
+    }
   }
 
   // 移動可能範囲表示のクリア
