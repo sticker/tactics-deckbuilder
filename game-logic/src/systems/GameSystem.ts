@@ -1,5 +1,12 @@
-import { BattleState, createBattleState, addUnit, processCT, moveUnitAction, getUnitMoveRange } from '../models/BattleState';
-import { createUnit, JobType } from '../models/Unit';
+import {
+  BattleState,
+  createBattleState,
+  addUnit,
+  processCT,
+  moveUnitAction,
+  getUnitMoveRange,
+} from '../models/BattleState';
+import { createUnit, JobType, resetUnitCT } from '../models/Unit';
 import { Position } from '../models/Position';
 
 export class GameSystem {
@@ -30,7 +37,12 @@ export class GameSystem {
   }
 
   // ユニットをチームに追加
-  private addUnitToTeam(name: string, job: JobType, position: Position, teamId: number): void {
+  private addUnitToTeam(
+    name: string,
+    job: JobType,
+    position: Position,
+    teamId: number
+  ): void {
     const unit = createUnit(name, job, position, teamId);
     this.state = addUnit(this.state, unit);
   }
@@ -72,5 +84,121 @@ export class GameSystem {
   // 現在の状態を取得
   public getState(): BattleState {
     return this.state;
+  }
+
+  // アクション処理関数
+  public executeAction(
+    sourceUnitId: string,
+    actionType: string,
+    targetUnitId: string,
+    targetPosition: Position
+  ): boolean {
+    // アクティブユニットかどうか確認
+    if (this.state.activeUnitId !== sourceUnitId) {
+      console.log('アクティブユニットではありません');
+      return false;
+    }
+
+    // ソースと対象のユニットを取得
+    const sourceUnit = this.state.units.find(
+      (unit) => unit.id === sourceUnitId
+    );
+    const targetUnit = this.state.units.find(
+      (unit) => unit.id === targetUnitId
+    );
+
+    if (!sourceUnit || !targetUnit) {
+      console.log('ユニットが見つかりません');
+      return false;
+    }
+
+    // 距離チェック
+    const distance =
+      Math.abs(sourceUnit.position.x - targetPosition.x) +
+      Math.abs(sourceUnit.position.y - targetPosition.y);
+
+    let actionRange = 0;
+
+    if (actionType.startsWith('attack')) {
+      actionRange = 1; // 攻撃範囲
+    } else if (actionType.startsWith('heal')) {
+      actionRange = 2; // 回復範囲
+    }
+
+    if (distance > actionRange) {
+      console.log('対象が範囲外です');
+      return false;
+    }
+
+    // アクション実行
+    if (actionType.startsWith('attack')) {
+      // 攻撃処理
+      const attackPower = sourceUnit.stats.atk;
+      const defense = targetUnit.stats.def;
+      const damage = Math.max(1, attackPower - defense / 2);
+
+      // ダメージ適用
+      const updatedUnits = this.state.units.map((unit) => {
+        if (unit.id === targetUnit.id) {
+          const newHp = Math.max(0, unit.stats.hp - damage);
+          return {
+            ...unit,
+            stats: {
+              ...unit.stats,
+              hp: newHp,
+            },
+          };
+        }
+        return unit;
+      });
+
+      // ターン終了処理
+      this.state = {
+        ...this.state,
+        units: updatedUnits.map((unit) =>
+          unit.id === sourceUnitId
+            ? { ...unit, stats: { ...unit.stats, ct: 0 } }
+            : unit
+        ),
+        activeUnitId: null,
+        turnCount: this.state.turnCount + 1,
+      };
+
+      return true;
+    } else if (actionType.startsWith('heal')) {
+      // 回復処理
+      const healAmount = 20;
+
+      // HP回復
+      const updatedUnits = this.state.units.map((unit) => {
+        if (unit.id === targetUnit.id) {
+          const newHp = Math.min(unit.stats.maxHp, unit.stats.hp + healAmount);
+          return {
+            ...unit,
+            stats: {
+              ...unit.stats,
+              hp: newHp,
+            },
+          };
+        }
+        return unit;
+      });
+
+      // ターン終了処理
+      this.state = {
+        ...this.state,
+        units: updatedUnits.map((unit) =>
+          unit.id === sourceUnitId
+            ? { ...unit, stats: { ...unit.stats, ct: 0 } }
+            : unit
+        ),
+        activeUnitId: null,
+        turnCount: this.state.turnCount + 1,
+      };
+
+      return true;
+    }
+
+    return false;
   }
 }

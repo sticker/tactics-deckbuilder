@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { GameSystem, BattleState, Position, Unit } from 'game-logic';
+import {
+  GameSystem,
+  BattleState,
+  Position,
+  Unit,
+} from 'game-logic';
 import { GameConnectionState } from './useGameConnection';
 
 // タイルのサイズ定義
@@ -61,7 +66,9 @@ export function useGameRenderer(
   gameSystemRef: React.RefObject<GameSystem | null>,
   isAppInitialized: boolean = false,
   connectionState?: GameConnectionState,
-  moveUnit?: (unitId: string, targetPosition: Position) => void
+  moveUnit?: (unitId: string, targetPosition: Position) => void,
+  currentActionType?: string | null,
+  executeAction?: (sourceUnitId: string, targetUnitId: string, targetPosition: Position) => void
 ) {
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const selectedUnitIdRef = useRef<string | null>(null);
@@ -72,9 +79,9 @@ export function useGameRenderer(
   const unitsRef = useRef<Map<string, PIXI.Graphics>>(new Map());
   const moveRangeRef = useRef<PIXI.Graphics[]>([]);
   const isInitializedRef = useRef<boolean>(false);
-  // 接続状態とmoveUnitへの参照を追加
   const connectionStateRef = useRef(connectionState);
   const moveUnitRef = useRef(moveUnit);
+  const actionRangeRef = useRef<PIXI.Graphics[]>([]);
 
   // 値が変わったらrefを更新
   useEffect(() => {
@@ -324,6 +331,52 @@ export function useGameRenderer(
       }
 
       console.log('ユニットが選択されました:', clickedUnit.id);
+
+      // 既に選択中のユニットがあり、かつアクションが選択されている場合
+      if (
+        selectedUnitIdRef.current &&
+        currentActionType &&
+        currentActionType !== 'move'
+      ) {
+        const sourceUnit = gameSystem
+          .getState()
+          .units.find((unit) => unit.id === selectedUnitIdRef.current);
+
+        if (sourceUnit) {
+          // 攻撃アクションの場合は敵ユニットのみ対象
+          if (
+            currentActionType.startsWith('attack') &&
+            clickedUnit.teamId === sourceUnit.teamId
+          ) {
+            if (window.showGameNotification) {
+              window.showGameNotification('味方ユニットは攻撃できません');
+            }
+            return;
+          }
+
+          // 回復アクションの場合は味方ユニットのみ対象
+          if (
+            currentActionType.startsWith('heal') &&
+            clickedUnit.teamId !== sourceUnit.teamId
+          ) {
+            if (window.showGameNotification) {
+              window.showGameNotification('敵ユニットは回復できません');
+            }
+            return;
+          }
+
+          // アクション実行
+          if (executeAction) {
+            executeAction(sourceUnit.id, clickedUnit.id, clickedUnit.position);
+
+            // アクション実行後、選択とアクション表示をクリア
+            clearMoveRange();
+            clearActionRange();
+            setSelectedUnitId(null);
+            return;
+          }
+        }
+      }
       // 既存の選択をクリア
       clearMoveRange();
       setSelectedUnitId(clickedUnit.id);
@@ -713,5 +766,128 @@ export function useGameRenderer(
     });
   }
 
-  return { selectedUnitId, setSelectedUnitId };
+  // アクション範囲表示関数
+  function showActionRange(
+    unitId: string,
+    actionType: string,
+    range: number = 1
+  ) {
+    console.log('アクション範囲表示:', actionType, range, unitId);
+    const gameSystem = gameSystemRef.current;
+    const overlayContainer = overlayContainerRef.current;
+    if (!gameSystem || !overlayContainer) return;
+
+    // 既存の範囲表示をクリア
+    clearActionRange();
+
+    // アクション範囲の色
+    const fillColor = actionType === 'attack' ? 0xff0000 : 0x00ff00; // 赤または緑
+    const lineColor = actionType === 'attack' ? 0xff3333 : 0x33ff33;
+    const alpha = 0.3;
+
+    // ユニットの位置を取得
+    const unit = gameSystem.getState().units.find((u) => u.id === unitId);
+    if (!unit) return;
+
+    // マップを取得
+    const state = gameSystem.getState();
+    const map = state.map;
+
+    // アクション可能なタイルを検索
+    for (let y = 0; y < map.getHeight(); y++) {
+      for (let x = 0; x < map.getWidth(); x++) {
+        const position = { x, y };
+        const tile = map.getTile(position);
+
+        if (!tile || !tile.passable) continue;
+
+        // マンハッタン距離でアクション範囲をチェック
+        const distance =
+          Math.abs(unit.position.x - x) + Math.abs(unit.position.y - y);
+
+        if (distance <= range && distance > 0) {
+          // 攻撃の場合は敵ユニットがいる位置のみ、回復の場合は味方ユニットがいる位置のみ
+          const targetUnit = state.units.find(
+            (u) => u.position.x === x && u.position.y === y
+          );
+
+          let shouldDisplay = false;
+
+          if (
+            actionType === 'attack' &&
+            targetUnit &&
+            targetUnit.teamId !== unit.teamId
+          ) {
+            shouldDisplay = true;
+          } else if (
+            actionType === 'heal' &&
+            targetUnit &&
+            targetUnit.teamId === unit.teamId
+          ) {
+            shouldDisplay = true;
+          }
+
+          if (shouldDisplay) {
+            // 範囲表示用のグラフィックスを作成
+            const { x: screenX, y: screenY } = isoToScreen(
+              position,
+              tile.height
+            );
+            const rangeGraphic = new PIXI.Graphics();
+
+            rangeGraphic.beginFill(fillColor, alpha);
+            rangeGraphic.lineStyle(2, lineColor, 0.8);
+            rangeGraphic.drawPolygon([
+              -TILE_WIDTH / 2,
+              0,
+              0,
+              -TILE_HEIGHT / 2,
+              TILE_WIDTH / 2,
+              0,
+              0,
+              TILE_HEIGHT / 2,
+            ]);
+            rangeGraphic.endFill();
+            rangeGraphic.position.set(screenX, screenY);
+
+            overlayContainer.addChild(rangeGraphic);
+            actionRangeRef.current.push(rangeGraphic);
+          }
+        }
+      }
+    }
+
+    if (actionRangeRef.current.length === 0) {
+      // 範囲内に対象がいない場合
+      if (window.showGameNotification) {
+        window.showGameNotification(
+          actionType === 'attack'
+            ? '攻撃可能な敵ユニットが範囲内にいません'
+            : '回復可能な味方ユニットが範囲内にいません'
+        );
+      }
+    }
+  }
+
+  // アクション範囲表示のクリア
+  function clearActionRange() {
+    const overlayContainer = overlayContainerRef.current;
+    if (!overlayContainer) return;
+
+    actionRangeRef.current.forEach((graphic) => {
+      overlayContainer.removeChild(graphic);
+      graphic.destroy();
+    });
+
+    actionRangeRef.current = [];
+  }
+
+  return {
+    selectedUnitId,
+    setSelectedUnitId,
+    showMoveRange,
+    clearMoveRange,
+    showActionRange,
+    clearActionRange,
+  };
 }
