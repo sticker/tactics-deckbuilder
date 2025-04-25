@@ -120,40 +120,60 @@ const GameCanvas: React.FC = () => {
   const executeAction = (
     sourceUnitId: string,
     targetUnitId: string,
-    targetPosition: Position
+    targetPosition: Position,
+    actionType: string
   ) => {
     if (!gameSystemRef.current) return;
 
+    console.log(
+      `アクション実行開始: ${actionType}`,
+      sourceUnitId,
+      targetUnitId
+    );
+
     const gameSystem = gameSystemRef.current;
 
-    if (!currentActionType) return;
-
-    // アクションタイプに応じた処理
-    const success = gameSystem.executeAction(
+    // アクションタイプを引数から直接使用
+    const result = gameSystem.executeAction(
       sourceUnitId,
-      currentActionType,
+      actionType,
       targetUnitId,
       targetPosition
     );
 
-    if (success) {
-      console.log(`${currentActionType}アクション成功`);
+    if (result.success) {
+      console.log(`${actionType}アクション成功!`);
       if (window.showGameNotification) {
         window.showGameNotification(
           `${
-            currentActionType.startsWith('attack') ? '攻撃' : '回復'
+            actionType.startsWith('attack') ? '攻撃' : '回復'
           }アクションを実行しました`
         );
       }
     } else {
+      console.log('アクション実行失敗:', result.reason);
+
+      // エラー理由に応じたメッセージを表示
       if (window.showGameNotification) {
-        window.showGameNotification('アクションの実行に失敗しました');
+        let errorMessage = 'アクションの実行に失敗しました';
+
+        if (result.reason === 'active_unit_check_failed') {
+          // 既に行動済みかどうかのチェックが原因の場合は通知しない
+          // (二重クリックの場合は通知しない)
+          return;
+        } else if (result.reason === 'target_out_of_range') {
+          errorMessage = '対象が範囲外です';
+        } else if (result.reason === 'unit_not_found') {
+          errorMessage = 'ユニットが見つかりません';
+        }
+
+        window.showGameNotification(errorMessage);
       }
     }
 
     // 状態をリセット
     setCurrentActionType(null);
-    
+
     // アクション実行後に強制的に再レンダリング
     setTimeout(() => {
       handleStateUpdate();
@@ -171,10 +191,10 @@ const GameCanvas: React.FC = () => {
     appRef,
     gameSystemRef,
     appInitialized,
+    currentActionType,
     connectionState,
     moveUnit,
-    currentActionType, // 追加：現在のアクションタイプ
-    executeAction // 追加：アクション実行関数
+    executeAction
   );
 
   // ゲームループのセットアップ
@@ -201,7 +221,15 @@ const GameCanvas: React.FC = () => {
     clearMoveRange();
     clearActionRange();
 
+    // 選択済みのアクションを再度クリックした場合は選択解除
+    if (currentActionType === actionType) {
+      console.log('アクション選択解除');
+      setCurrentActionType(null);
+      return;
+    }
+
     // 現在のアクションを設定
+    console.log('アクションタイプをセット:', actionType);
     setCurrentActionType(actionType);
 
     if (actionType === 'move') {

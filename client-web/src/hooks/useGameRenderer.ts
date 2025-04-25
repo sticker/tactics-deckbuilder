@@ -60,13 +60,14 @@ export function useGameRenderer(
   appRef: React.RefObject<PIXI.Application | null>,
   gameSystemRef: React.RefObject<GameSystem | null>,
   isAppInitialized: boolean = false,
+  currentActionType: string | null,
   connectionState?: GameConnectionState,
   moveUnit?: (unitId: string, targetPosition: Position) => void,
-  currentActionType?: string | null,
   executeAction?: (
     sourceUnitId: string,
     targetUnitId: string,
-    targetPosition: Position
+    targetPosition: Position,
+    actionType: string // 追加: actionTypeパラメータ
   ) => void
 ) {
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
@@ -81,6 +82,7 @@ export function useGameRenderer(
   const connectionStateRef = useRef(connectionState);
   const moveUnitRef = useRef(moveUnit);
   const actionRangeRef = useRef<PIXI.Graphics[]>([]);
+  const currentActionTypeRef = useRef<string | null>(null);
 
   // 値が変わったらrefを更新
   useEffect(() => {
@@ -96,6 +98,10 @@ export function useGameRenderer(
   useEffect(() => {
     moveUnitRef.current = moveUnit;
   }, [moveUnit]);
+
+  useEffect(() => {
+    currentActionTypeRef.current = currentActionType;
+  }, [currentActionType]);
 
   // アプリが初期化されていないなら何もしない
   useEffect(() => {
@@ -250,7 +256,6 @@ export function useGameRenderer(
     overlayContainer.on('pointerdown', handleMapClick);
 
     // ホバーイベントも設定
-    overlayContainer.on('pointerdown', handleMapClick);
     overlayContainer.on('pointermove', handleMouseMove);
   }
 
@@ -321,55 +326,31 @@ export function useGameRenderer(
     );
 
     if (clickedUnit) {
-      // 既に選択されているユニットを再度クリックした場合は選択解除
-      if (selectedUnitIdRef.current === clickedUnit.id) {
-        console.log('ユニット選択を解除します');
-        clearMoveRange();
-        clearActionRange(); // アクション範囲も消去
-        setSelectedUnitId(null);
-        return;
-      }
+      console.log(
+        'ユニットがクリックされました:',
+        clickedUnit.id,
+        'アクション:',
+        currentActionTypeRef.current
+      );
 
-      console.log('ユニットが選択されました:', clickedUnit.id);
-
-      // 既に選択中のユニットがあり、かつアクションが選択されている場合
+      // 既に選択されているユニットがあり、アクションが選択されている場合
       if (
         selectedUnitIdRef.current &&
-        currentActionType &&
-        currentActionType !== 'move'
+        currentActionTypeRef.current &&
+        currentActionTypeRef.current !== 'move'
       ) {
+        console.log('アクション実行条件確認中:', currentActionTypeRef.current);
+
         const sourceUnit = gameSystem
           .getState()
           .units.find((unit) => unit.id === selectedUnitIdRef.current);
 
-        if (sourceUnit) {
-          // 攻撃アクションの場合は敵ユニットのみ対象
-          if (
-            currentActionType.startsWith('attack') &&
-            clickedUnit.teamId === sourceUnit.teamId
-          ) {
-            if (window.showGameNotification) {
-              window.showGameNotification('味方ユニットは攻撃できません');
-            }
-            return;
-          }
-
-          // 回復アクションの場合は味方ユニットのみ対象
-          if (
-            currentActionType.startsWith('heal') &&
-            clickedUnit.teamId !== sourceUnit.teamId
-          ) {
-            if (window.showGameNotification) {
-              window.showGameNotification('敵ユニットは回復できません');
-            }
-            return;
-          }
-
+        if (sourceUnit && executeAction) {
           // ターゲットが範囲内にあるか確認
           const isInRange = checkActionRange(
             sourceUnit.position,
             clickedUnit.position,
-            currentActionType.startsWith('attack') ? 1 : 2 // 攻撃は範囲1、回復は範囲2
+            currentActionTypeRef.current.startsWith('attack') ? 1 : 2
           );
 
           if (!isInRange) {
@@ -379,16 +360,26 @@ export function useGameRenderer(
             return;
           }
 
-          // アクション実行
-          if (executeAction) {
-            executeAction(sourceUnit.id, clickedUnit.id, clickedUnit.position);
+          console.log(
+            'アクション実行:',
+            currentActionTypeRef.current,
+            sourceUnit.id,
+            clickedUnit.id
+          );
 
-            // アクション実行後、選択とアクション表示をクリア
-            clearMoveRange();
-            clearActionRange();
-            setSelectedUnitId(null);
-            return;
-          }
+          // 修正: アクションタイプを直接渡す
+          executeAction(
+            sourceUnit.id,
+            clickedUnit.id,
+            clickedUnit.position,
+            currentActionTypeRef.current
+          );
+
+          // アクション実行後、選択とアクション表示をクリア
+          clearMoveRange();
+          clearActionRange();
+          setSelectedUnitId(null);
+          return;
         }
       }
       // 既存の選択をクリア
@@ -856,29 +847,13 @@ export function useGameRenderer(
           Math.abs(unit.position.x - x) + Math.abs(unit.position.y - y);
 
         if (distance <= range && distance > 0) {
-          // 攻撃の場合は敵ユニットがいる位置のみ、回復の場合は味方ユニットがいる位置のみ
+          // 対象位置にユニットがいるか確認
           const targetUnit = state.units.find(
             (u) => u.position.x === x && u.position.y === y
           );
 
-          let shouldDisplay = false;
-
-          if (
-            actionType === 'attack' &&
-            targetUnit &&
-            targetUnit.teamId !== unit.teamId
-          ) {
-            shouldDisplay = true;
-          } else if (
-            actionType === 'heal' &&
-            targetUnit &&
-            targetUnit.teamId === unit.teamId &&
-            targetUnit.id !== unit.id // 自分自身は除外
-          ) {
-            shouldDisplay = true;
-          }
-
-          if (shouldDisplay) {
+          // ユニットがいる場所のみ表示（自分自身を除く）
+          if (targetUnit && targetUnit.id !== unit.id) {
             // 範囲表示用のグラフィックスを作成
             const { x: screenX, y: screenY } = isoToScreen(
               position,
@@ -912,9 +887,7 @@ export function useGameRenderer(
       // 範囲内に対象がいない場合
       if (window.showGameNotification) {
         window.showGameNotification(
-          actionType === 'attack'
-            ? '攻撃可能な敵ユニットが範囲内にいません'
-            : '回復可能な味方ユニットが範囲内にいません'
+          'アクション可能なユニットが範囲内にいません'
         );
       }
     }

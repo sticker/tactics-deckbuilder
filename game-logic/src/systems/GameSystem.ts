@@ -92,11 +92,12 @@ export class GameSystem {
     actionType: string,
     targetUnitId: string,
     targetPosition: Position
-  ): boolean {
+  ): { success: boolean; reason?: string } {
+    // 戻り値の型を変更
     // アクティブユニットかどうか確認
     if (this.state.activeUnitId !== sourceUnitId) {
       console.log('アクティブユニットではありません');
-      return false;
+      return { success: false, reason: 'active_unit_check_failed' };
     }
 
     // ソースと対象のユニットを取得
@@ -109,7 +110,7 @@ export class GameSystem {
 
     if (!sourceUnit || !targetUnit) {
       console.log('ユニットが見つかりません');
-      return false;
+      return { success: false, reason: 'unit_not_found' };
     }
 
     // 距離チェック
@@ -127,7 +128,7 @@ export class GameSystem {
 
     if (distance > actionRange) {
       console.log('対象が範囲外です');
-      return false;
+      return { success: false, reason: 'target_out_of_range' };
     }
 
     // アクション実行
@@ -164,7 +165,7 @@ export class GameSystem {
         turnCount: this.state.turnCount + 1,
       };
 
-      return true;
+      return { success: true };
     } else if (actionType.startsWith('heal')) {
       // 回復処理
       const healAmount = 20;
@@ -196,9 +197,9 @@ export class GameSystem {
         turnCount: this.state.turnCount + 1,
       };
 
-      return true;
+      return { success: true };
     }
 
-    return false;
+    return { success: false, reason: 'invalid_action_type' };
   }
 }
