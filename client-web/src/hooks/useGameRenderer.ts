@@ -3,6 +3,18 @@ import * as PIXI from 'pixi.js';
 import { GameSystem, BattleState, Position, Unit } from 'game-logic';
 import { GameConnectionState } from './useGameConnection';
 
+// 移動アニメーション用の型定義
+interface AnimatingUnit {
+  unitId: string;
+  path: Position[];
+  currentStep: number;
+  totalSteps: number;
+  startTime: number;
+  duration: number; // 移動全体の所要時間（ミリ秒）
+  stepDuration: number; // 1ステップあたりの所要時間（ミリ秒）
+  onComplete: () => void;
+}
+
 // タイルのサイズ定義
 const TILE_WIDTH = 64;
 const TILE_HEIGHT = 32;
@@ -92,6 +104,8 @@ export function useGameRenderer(
     x: 0,
     y: 0,
   }); // パン目標位置
+  const animatingUnitsRef = useRef<AnimatingUnit[]>([]);
+  const animationFrameIdRef = useRef<number | null>(null);
 
   // 値が変わったらrefを更新
   useEffect(() => {
@@ -181,6 +195,12 @@ export function useGameRenderer(
       if (cameraAnimationRef.current !== null) {
         cancelAnimationFrame(cameraAnimationRef.current);
         cameraAnimationRef.current = null;
+      }
+
+      // アニメーションのクリーンアップを追加
+      if (animationFrameIdRef.current !== null) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
       }
 
       // コンテナが存在する場合のみ削除
@@ -556,6 +576,412 @@ export function useGameRenderer(
     window.removeEventListener('contextmenu', (e) => e.preventDefault());
   }
 
+  // 2点間の線形補間関数
+  function lerp(start: number, end: number, t: number): number {
+    return start + t * (end - start);
+  }
+
+  // パスの計算（シンプルな線形パス）
+  function calculateLinearPath(
+    start: Position,
+    end: Position,
+    steps: number
+  ): Position[] {
+    const path: Position[] = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      path.push({
+        x: lerp(start.x, end.x, t),
+        y: lerp(start.y, end.y, t),
+      });
+    }
+    return path;
+  }
+
+  // A*アルゴリズムによるパス検索
+  function findPath(
+    state: BattleState,
+    start: Position,
+    end: Position
+  ): Position[] {
+    // 簡易的なA*アルゴリズム
+    try {
+      // ヒューリスティック関数（マンハッタン距離）
+      const heuristic = (a: Position, b: Position) => {
+        return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+      };
+
+      // 開始位置と目標位置が同じ場合
+      if (start.x === end.x && start.y === end.y) {
+        return [{ ...start }];
+      }
+
+      // 開始位置または目標位置が無効な場合
+      if (
+        !start ||
+        !end ||
+        typeof start.x !== 'number' ||
+        typeof start.y !== 'number' ||
+        typeof end.x !== 'number' ||
+        typeof end.y !== 'number'
+      ) {
+        console.error('パス検索: 無効な開始位置または目標位置');
+        return [];
+      }
+
+      // 既に調査済みのノード
+      const closedSet = new Set<string>();
+
+      // 現在調査中のノード
+      const openSet = new Set<string>();
+      openSet.add(`${start.x},${start.y}`);
+
+      // 各ノードへの最適経路のスコア
+      const gScore: Record<string, number> = {};
+      gScore[`${start.x},${start.y}`] = 0;
+
+      // 各ノードの推定スコア
+      const fScore: Record<string, number> = {};
+      fScore[`${start.x},${start.y}`] = heuristic(start, end);
+
+      // 各ノードの親ノード
+      const cameFrom: Record<string, Position> = {};
+
+      // 隣接ノードの方向を定義
+      const directions = [
+        { x: 0, y: -1 }, // 上
+        { x: 1, y: 0 }, // 右
+        { x: 0, y: 1 }, // 下
+        { x: -1, y: 0 }, // 左
+      ];
+
+      // 最大探索回数（無限ループ防止）
+      const maxIterations = 1000;
+      let iterations = 0;
+
+      // openSetが空になるまで探索を続ける
+      while (openSet.size > 0 && iterations < maxIterations) {
+        iterations++;
+
+        // fScoreが最小のノードを取得
+        let currentKey = '';
+        let currentScore = Infinity;
+
+        for (const key of openSet) {
+          if (fScore[key] !== undefined && fScore[key] < currentScore) {
+            currentScore = fScore[key];
+            currentKey = key;
+          }
+        }
+
+        // 現在のノードの座標を取得
+        const [x, y] = currentKey.split(',').map(Number);
+        const current: Position = { x, y };
+
+        // 目標地点に到達したかチェック
+        if (current.x === end.x && current.y === end.y) {
+          // ゴールに到達、パスを再構成
+          const path: Position[] = [];
+          let curr = current;
+
+          while (curr) {
+            path.unshift({ ...curr });
+            const key = `${curr.x},${curr.y}`;
+            curr = cameFrom[key];
+          }
+
+          return path;
+        }
+
+        // 現在のノードを処理済みに
+        openSet.delete(currentKey);
+        closedSet.add(currentKey);
+
+        // 隣接ノードをチェック
+        for (const dir of directions) {
+          const neighbor: Position = {
+            x: current.x + dir.x,
+            y: current.y + dir.y,
+          };
+
+          // マップ範囲外や通行不能の場合はスキップ
+          if (
+            neighbor.x < 0 ||
+            neighbor.y < 0 ||
+            neighbor.x >= state.map.getWidth() ||
+            neighbor.y >= state.map.getHeight()
+          ) {
+            continue;
+          }
+
+          const neighborTile = state.map.getTile(neighbor);
+          if (!neighborTile || !neighborTile.passable) {
+            continue;
+          }
+
+          // 敵ユニットがいる場合もスキップ
+          const unitAtPos = state.units.find(
+            (u) => u.position.x === neighbor.x && u.position.y === neighbor.y
+          );
+          if (unitAtPos) {
+            // 移動元のユニットと同じ位置でない場合かつ目的地でない場合はスキップ
+            const startUnitId = state.units.find(
+              (u) => u.position.x === start.x && u.position.y === start.y
+            )?.id;
+
+            if (unitAtPos.id !== startUnitId) {
+              // 目的地の場合は許可（ユニット入れ替え用）
+              if (!(neighbor.x === end.x && neighbor.y === end.y)) {
+                continue;
+              }
+            }
+          }
+
+          const neighborKey = `${neighbor.x},${neighbor.y}`;
+
+          // 処理済みのノードはスキップ
+          if (closedSet.has(neighborKey)) {
+            continue;
+          }
+
+          // 現在のノードを経由したスコアを計算
+          const tentativeGScore = gScore[currentKey] + 1;
+
+          // 未調査のノードか、より良い経路を発見した場合
+          if (
+            !openSet.has(neighborKey) ||
+            tentativeGScore < gScore[neighborKey]
+          ) {
+            // 経路を更新
+            cameFrom[neighborKey] = current;
+            gScore[neighborKey] = tentativeGScore;
+            fScore[neighborKey] = tentativeGScore + heuristic(neighbor, end);
+
+            // 未調査なら調査対象に追加
+            if (!openSet.has(neighborKey)) {
+              openSet.add(neighborKey);
+            }
+          }
+        }
+      }
+
+      // パスが見つからなかった場合のフォールバック（直線パス）
+      console.warn(
+        'A*でパスが見つかりませんでした。直線パスにフォールバックします。'
+      );
+      return calculateLinearPath(
+        start,
+        end,
+        Math.max(Math.abs(end.x - start.x), Math.abs(end.y - start.y)) + 1
+      );
+    } catch (error) {
+      console.error('パス検索エラー:', error);
+      // エラー時は空のパスを返す
+      return [];
+    }
+  }
+
+  // 移動アニメーションの開始
+  function startMoveAnimation(
+    unitId: string,
+    path: Position[],
+    duration: number = 800,
+    onComplete?: () => void
+  ) {
+    console.log('移動アニメーション開始:', unitId, path);
+
+    // パスのバリデーション
+    if (!path || path.length <= 1) {
+      console.log('無効なパス、アニメーションをスキップ');
+      if (onComplete) onComplete();
+      return;
+    }
+
+    // 不正な値が含まれていないか確認
+    const validPath = path.filter(
+      (pos) => pos && typeof pos.x === 'number' && typeof pos.y === 'number'
+    );
+
+    if (validPath.length !== path.length) {
+      console.warn('不正な位置データがパスに含まれています。修正します。');
+    }
+
+    if (validPath.length <= 1) {
+      console.log('有効なパスポイントが不足、アニメーションをスキップ');
+      if (onComplete) onComplete();
+      return;
+    }
+
+    const now = performance.now();
+    const stepDuration = duration / (validPath.length - 1);
+
+    // アニメーション情報を登録
+    const animatingUnit: AnimatingUnit = {
+      unitId,
+      path: validPath,
+      currentStep: 0,
+      totalSteps: validPath.length - 1,
+      startTime: now,
+      duration,
+      stepDuration,
+      onComplete: onComplete || (() => {}),
+    };
+
+    // 既存のアニメーションを削除（同じユニットが複数回移動しないように）
+    animatingUnitsRef.current = animatingUnitsRef.current.filter(
+      (anim) => anim.unitId !== unitId
+    );
+
+    // アニメーション中のユニットリストに追加
+    animatingUnitsRef.current.push(animatingUnit);
+
+    // アニメーションループが未起動なら開始
+    if (animationFrameIdRef.current === null) {
+      animationFrameIdRef.current = requestAnimationFrame(updateAnimations);
+    }
+  }
+
+  // アニメーションの更新
+  function updateAnimations(timestamp: number) {
+    const gameSystem = gameSystemRef.current;
+    if (!gameSystem) {
+      animationFrameIdRef.current = requestAnimationFrame(updateAnimations);
+      return;
+    }
+
+    let hasActiveAnimations = false;
+    const state = gameSystem.getState();
+
+    // デバッグ情報
+    console.log(
+      `アニメーション更新: ${animatingUnitsRef.current.length}個のユニットがアニメーション中`
+    );
+
+    // 各アニメーション中のユニットを更新
+    for (let i = animatingUnitsRef.current.length - 1; i >= 0; i--) {
+      try {
+        const anim = animatingUnitsRef.current[i];
+
+        // パスが空または無効なら処理をスキップ
+        if (!anim || !anim.path || anim.path.length === 0) {
+          console.error('無効なアニメーションデータ:', anim);
+          animatingUnitsRef.current.splice(i, 1);
+          continue;
+        }
+
+        const elapsed = timestamp - anim.startTime;
+
+        // 総経過時間から現在のステップを計算
+        const currentStep = Math.min(
+          Math.floor(elapsed / anim.stepDuration),
+          anim.totalSteps
+        );
+
+        // アニメーション完了判定
+        if (currentStep >= anim.totalSteps) {
+          console.log('アニメーション完了:', anim.unitId);
+
+          // 最終位置に設定
+          const unit = state.units.find((u) => u.id === anim.unitId);
+          const unitGraphic = unitsRef.current.get(anim.unitId);
+
+          if (unit && unitGraphic && anim.path.length > 0) {
+            const endPos = anim.path[anim.path.length - 1];
+            const tile = state.map.getTile(endPos);
+            const height = tile ? tile.height : 0;
+            const { x, y } = isoToScreen(endPos, height);
+            unitGraphic.position.set(x, y);
+          }
+
+          // 完了コールバックを呼び出し
+          if (anim.onComplete) {
+            anim.onComplete();
+          }
+
+          // リストから削除
+          animatingUnitsRef.current.splice(i, 1);
+        } else {
+          hasActiveAnimations = true;
+
+          // 現在のステップと次のステップの間を補間
+          if (currentStep < anim.path.length - 1) {
+            const unit = state.units.find((u) => u.id === anim.unitId);
+            const unitGraphic = unitsRef.current.get(anim.unitId);
+
+            if (unit && unitGraphic) {
+              // 安全にインデックスをチェック
+              if (
+                currentStep >= 0 &&
+                currentStep < anim.path.length &&
+                currentStep + 1 < anim.path.length
+              ) {
+                const currentPos = anim.path[currentStep];
+                const nextPos = anim.path[currentStep + 1];
+
+                // パス位置の有効性を確認
+                if (
+                  currentPos &&
+                  nextPos &&
+                  typeof currentPos.x === 'number' &&
+                  typeof currentPos.y === 'number' &&
+                  typeof nextPos.x === 'number' &&
+                  typeof nextPos.y === 'number'
+                ) {
+                  // ステップ内での進行度を計算（0〜1）
+                  const stepProgress =
+                    (elapsed % anim.stepDuration) / anim.stepDuration;
+
+                  // 2点間を線形補間
+                  const interpPos = {
+                    x: lerp(currentPos.x, nextPos.x, stepProgress),
+                    y: lerp(currentPos.y, nextPos.y, stepProgress),
+                  };
+
+                  // 高さを考慮した座標を計算
+                  const currentTile = state.map.getTile(currentPos);
+                  const nextTile = state.map.getTile(nextPos);
+                  const currentHeight =
+                    currentTile && typeof currentTile.height === 'number'
+                      ? currentTile.height
+                      : 0;
+                  const nextHeight =
+                    nextTile && typeof nextTile.height === 'number'
+                      ? nextTile.height
+                      : 0;
+
+                  // 高さも補間
+                  const interpHeight = lerp(
+                    currentHeight,
+                    nextHeight,
+                    stepProgress
+                  );
+
+                  // ユニットのバウンス効果（軽いジャンプ感）
+                  const bounceHeight = Math.sin(stepProgress * Math.PI) * 8;
+
+                  // 画面座標に変換して位置を更新
+                  const { x, y } = isoToScreen(interpPos, interpHeight);
+                  unitGraphic.position.set(x, y - bounceHeight);
+                }
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error('アニメーション更新エラー:', error);
+        // エラーが発生したアニメーションは削除
+        animatingUnitsRef.current.splice(i, 1);
+      }
+    }
+
+    // アニメーションがまだ残っている場合は続行
+    if (hasActiveAnimations) {
+      animationFrameIdRef.current = requestAnimationFrame(updateAnimations);
+    } else {
+      animationFrameIdRef.current = null;
+    }
+  }
+
   // マップクリック時の処理
   function handleMapClick(event: PIXI.FederatedPointerEvent) {
     const app = appRef.current;
@@ -711,32 +1137,79 @@ export function useGameRenderer(
             );
 
             try {
-              // ユニット移動を実行する前に、フラグを設定して選択解除中であることを記録
+              // ユニット移動を実行する前に、選択解除中であることを記録
               const movingUnitId = currentSelectedId;
+              const unit = gameSystem
+                .getState()
+                .units.find((u) => u.id === movingUnitId);
 
-              // まず選択状態をクリア（重要: 移動前に行う）
+              if (!unit) {
+                console.error('移動するユニットが見つかりません');
+                return;
+              }
+
+              // まず選択状態をクリア
               setSelectedUnitId(null);
               clearMoveRange();
               clearActionRange();
 
-              // 少し遅延させてから移動処理を実行（重要）
-              setTimeout(() => {
-                const success = gameSystem.moveUnit(
-                  movingUnitId,
-                  clickedPosition
-                );
-                if (success) {
-                  console.log('移動成功');
+              // パスを計算
+              const path = findPath(
+                gameSystem.getState(),
+                unit.position,
+                clickedPosition
+              );
 
-                  // 選択状態が再度設定されないように防止策を追加
-                  // （この時点で選択状態は既にnullになっているはず）
-                  if (selectedUnitIdRef.current === movingUnitId) {
-                    setSelectedUnitId(null);
+              console.log('計算されたパス:', path);
+
+              // パスが有効なら移動アニメーションを開始
+              if (path && path.length > 0) {
+                // アニメーション時間を計算（パスの長さに基づく、ただし上限あり）
+                const animationDuration = Math.min(path.length * 150, 800);
+
+                // アニメーション開始
+                startMoveAnimation(
+                  movingUnitId,
+                  path,
+                  animationDuration,
+                  () => {
+                    try {
+                      // アニメーション完了後に実際のゲームロジックでユニットを移動
+                      const success = gameSystem.moveUnit(
+                        movingUnitId,
+                        clickedPosition
+                      );
+
+                      if (success) {
+                        console.log('移動成功');
+
+                        // 通知メッセージを表示
+                        if (window.showGameNotification) {
+                          window.showGameNotification('移動完了');
+                        }
+                      } else {
+                        console.error('移動ロジックの実行に失敗');
+
+                        if (window.showGameNotification) {
+                          window.showGameNotification('移動に失敗しました');
+                        }
+                      }
+                    } catch (error) {
+                      console.error('移動実行エラー:', error);
+                    }
                   }
+                );
+              } else {
+                console.error('有効なパスが生成されませんでした');
+
+                if (window.showGameNotification) {
+                  window.showGameNotification(
+                    '移動経路を見つけられませんでした'
+                  );
                 }
-              }, 50);
+              }
             } catch (error) {
-              console.error('移動エラー:', error);
+              console.error('移動処理エラー:', error);
             }
           } else {
             // 移動できない場合は選択解除
