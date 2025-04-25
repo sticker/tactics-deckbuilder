@@ -83,6 +83,15 @@ export function useGameRenderer(
   const moveUnitRef = useRef(moveUnit);
   const actionRangeRef = useRef<PIXI.Graphics[]>([]);
   const currentActionTypeRef = useRef<string | null>(null);
+  const lastActiveUnitIdRef = useRef<string | null>(null); // 前回のアクティブユニットID
+  const cameraAnimationRef = useRef<number | null>(null); // カメラアニメーション用ID
+  const cameraPanStartTimeRef = useRef<number>(0); // パンアニメーション開始時間
+  const cameraPanDurationRef = useRef<number>(800); // パンアニメーション時間（ミリ秒）
+  const cameraPanStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 }); // パン開始位置
+  const cameraPanTargetPosRef = useRef<{ x: number; y: number }>({
+    x: 0,
+    y: 0,
+  }); // パン目標位置
 
   // 値が変わったらrefを更新
   useEffect(() => {
@@ -168,6 +177,12 @@ export function useGameRenderer(
       // イベントリスナーのクリーンアップ
       cleanupEventHandlers();
 
+      // カメラアニメーションがあれば停止
+      if (cameraAnimationRef.current !== null) {
+        cancelAnimationFrame(cameraAnimationRef.current);
+        cameraAnimationRef.current = null;
+      }
+
       // コンテナが存在する場合のみ削除
       if (mapContainerRef.current && app.stage) {
         app.stage.removeChild(mapContainerRef.current);
@@ -224,6 +239,150 @@ export function useGameRenderer(
     };
   }, [isAppInitialized, appRef]);
 
+  // アクティブユニットの変更を監視して自動的にカメラをパンする
+  useEffect(() => {
+    if (!isAppInitialized || !isInitializedRef.current) return;
+
+    const checkActiveUnitChange = () => {
+      const gameSystem = gameSystemRef.current;
+      if (!gameSystem) return;
+
+      const state = gameSystem.getState();
+      const currentActiveUnitId = state.activeUnitId;
+
+      // アクティブユニットが変わっていればカメラを移動
+      if (
+        currentActiveUnitId &&
+        currentActiveUnitId !== lastActiveUnitIdRef.current
+      ) {
+        console.log(
+          `アクティブユニットが変更されました: ${currentActiveUnitId}`
+        );
+        lastActiveUnitIdRef.current = currentActiveUnitId;
+
+        // アクティブユニットの位置を取得
+        const activeUnit = state.units.find(
+          (unit) => unit.id === currentActiveUnitId
+        );
+        if (activeUnit) {
+          // ユニットの位置にカメラを移動
+          panCameraToUnit(activeUnit);
+
+          // 通知メッセージを表示
+          if (window.showGameNotification) {
+            window.showGameNotification(`${activeUnit.name}の行動です`);
+          }
+        }
+      }
+    };
+
+    // 定期的にアクティブユニットをチェック
+    const intervalId = setInterval(checkActiveUnitChange, 300);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isAppInitialized]);
+
+  // カメラをユニットの位置にパンする関数
+  function panCameraToUnit(unit: Unit) {
+    const app = appRef.current;
+    const gameSystem = gameSystemRef.current;
+    if (
+      !app ||
+      !gameSystem ||
+      !mapContainerRef.current ||
+      !unitContainerRef.current ||
+      !overlayContainerRef.current
+    )
+      return;
+
+    // 現在実行中のカメラアニメーションがあれば停止
+    if (cameraAnimationRef.current !== null) {
+      cancelAnimationFrame(cameraAnimationRef.current);
+      cameraAnimationRef.current = null;
+    }
+
+    // ユニットのタイル高さを取得
+    const state = gameSystem.getState();
+    const tile = state.map.getTile(unit.position);
+    const height = tile ? tile.height : 0;
+
+    // ユニットの画面座標を計算
+    const unitScreenPos = isoToScreen(unit.position, height);
+
+    // 現在のカメラ位置（コンテナの中心位置）
+    const currentCenterX = app.screen.width / 2;
+    const currentCenterY = app.screen.height * 0.3;
+
+    // 現在のマップコンテナのオフセット
+    const currentOffsetX = mapContainerRef.current.position.x - currentCenterX;
+    const currentOffsetY = mapContainerRef.current.position.y - currentCenterY;
+
+    // 目標の新しいオフセット（ユニットを中心に表示）
+    const targetOffsetX = -unitScreenPos.x;
+    const targetOffsetY = -unitScreenPos.y;
+
+    // アニメーション開始情報を設定
+    cameraPanStartPosRef.current = {
+      x: currentOffsetX,
+      y: currentOffsetY,
+    };
+
+    cameraPanTargetPosRef.current = {
+      x: targetOffsetX,
+      y: targetOffsetY,
+    };
+
+    cameraPanStartTimeRef.current = performance.now();
+
+    // アニメーション関数
+    const animateCamera = (timestamp: number) => {
+      // 経過時間の計算
+      const elapsed = timestamp - cameraPanStartTimeRef.current;
+      const progress = Math.min(elapsed / cameraPanDurationRef.current, 1);
+
+      // イージング関数（smoothstep）
+      const smoothProgress = progress * progress * (3 - 2 * progress);
+
+      // 新しい位置を計算
+      const newOffsetX =
+        cameraPanStartPosRef.current.x +
+        (cameraPanTargetPosRef.current.x - cameraPanStartPosRef.current.x) *
+          smoothProgress;
+      const newOffsetY =
+        cameraPanStartPosRef.current.y +
+        (cameraPanTargetPosRef.current.y - cameraPanStartPosRef.current.y) *
+          smoothProgress;
+
+      // コンテナの位置を更新
+      mapContainerRef.current!.position.set(
+        currentCenterX + newOffsetX,
+        currentCenterY + newOffsetY
+      );
+
+      unitContainerRef.current!.position.set(
+        currentCenterX + newOffsetX,
+        currentCenterY + newOffsetY
+      );
+
+      overlayContainerRef.current!.position.set(
+        currentCenterX + newOffsetX,
+        currentCenterY + newOffsetY
+      );
+
+      // アニメーションが完了していなければ続行
+      if (progress < 1) {
+        cameraAnimationRef.current = requestAnimationFrame(animateCamera);
+      } else {
+        cameraAnimationRef.current = null;
+      }
+    };
+
+    // アニメーション開始
+    cameraAnimationRef.current = requestAnimationFrame(animateCamera);
+  }
+
   // ゲーム状態が変更されたときの再描画
   useEffect(() => {
     if (!isAppInitialized || !isInitializedRef.current) return;
@@ -252,11 +411,92 @@ export function useGameRenderer(
     hitArea.endFill();
     overlayContainer.addChild(hitArea);
 
-    // イベントリスナーを設定
-    overlayContainer.on('pointerdown', handleMapClick);
+    // ドラッグ関連の状態変数
+    let isDragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let lastX = 0;
+    let lastY = 0;
 
-    // ホバーイベントも設定
-    overlayContainer.on('pointermove', handleMouseMove);
+    // イベントリスナーを設定
+    overlayContainer.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
+      // 右クリックまたは中クリックの場合はドラッグモードを開始
+      if (event.button === 2 || event.button === 1) {
+        isDragging = true;
+        dragStartX = event.global.x;
+        dragStartY = event.global.y;
+        lastX = dragStartX;
+        lastY = dragStartY;
+
+        // ドラッグ中はカーソルを変更
+        overlayContainer.cursor = 'grabbing';
+
+        // デフォルトの右クリックメニューを抑制
+        event.preventDefault?.();
+        return;
+      }
+
+      // 左クリックの場合は通常のマップクリック処理
+      handleMapClick(event);
+    });
+
+    // マウス移動イベント
+    overlayContainer.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
+      if (
+        isDragging &&
+        mapContainerRef.current &&
+        unitContainerRef.current &&
+        overlayContainerRef.current
+      ) {
+        // ドラッグ中の処理
+        const dx = event.global.x - lastX;
+        const dy = event.global.y - lastY;
+
+        // すべてのコンテナを同時に移動
+        mapContainerRef.current.position.x += dx;
+        mapContainerRef.current.position.y += dy;
+        unitContainerRef.current.position.x += dx;
+        unitContainerRef.current.position.y += dy;
+        overlayContainerRef.current.position.x += dx;
+        overlayContainerRef.current.position.y += dy;
+
+        // 現在位置を更新
+        lastX = event.global.x;
+        lastY = event.global.y;
+      } else {
+        // 通常のマウスホバー処理
+        handleMouseMove(event);
+      }
+    });
+
+    // マウスアップイベント（ドラッグ終了）
+    overlayContainer.on('pointerup', (event: PIXI.FederatedPointerEvent) => {
+      if (isDragging) {
+        isDragging = false;
+        overlayContainer.cursor = 'pointer';
+      }
+    });
+
+    // マウスがコンテナから外れた場合もドラッグ終了
+    overlayContainer.on(
+      'pointerupoutside',
+      (event: PIXI.FederatedPointerEvent) => {
+        if (isDragging) {
+          isDragging = false;
+          overlayContainer.cursor = 'pointer';
+        }
+      }
+    );
+
+    // カメラ操作でのコンテキストメニュー抑制
+    window.addEventListener('contextmenu', (e) => {
+      if (isDragging) {
+        e.preventDefault();
+      }
+    });
+
+    // マウスホイールでのズーム機能（オプション）
+    // 必要に応じて実装
   }
 
   // マウスホバー処理
@@ -306,7 +546,14 @@ export function useGameRenderer(
     const overlayContainer = overlayContainerRef.current;
     if (!overlayContainer) return;
 
-    overlayContainer.off('pointerdown', handleMapClick);
+    // すべてのイベントリスナーを削除
+    overlayContainer.off('pointerdown');
+    overlayContainer.off('pointermove');
+    overlayContainer.off('pointerup');
+    overlayContainer.off('pointerupoutside');
+
+    // コンテキストメニュー抑制の解除
+    window.removeEventListener('contextmenu', (e) => e.preventDefault());
   }
 
   // マップクリック時の処理
