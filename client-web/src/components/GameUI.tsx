@@ -292,6 +292,16 @@ const GameUI: React.FC<GameUIProps> = memo(
         </div>
       </>
     );
+  },
+  (prevProps, nextProps) => {
+    // 変更がない場合はレンダリングをスキップ
+    return (
+      prevProps.selectedUnitId === nextProps.selectedUnitId &&
+      prevProps.currentActionType === nextProps.currentActionType &&
+      prevProps.connectionState.connected ===
+        nextProps.connectionState.connected &&
+      prevProps.connectionState.teamId === nextProps.connectionState.teamId
+    );
   }
 );
 

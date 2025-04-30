@@ -27,21 +27,22 @@ export function useGameRenderer(
     actionType: string
   ) => void
 ) {
-  // コンテナの参照
   const mapContainerRef = useRef<PIXI.Container | null>(null);
   const unitContainerRef = useRef<PIXI.Container | null>(null);
   const overlayContainerRef = useRef<PIXI.Container | null>(null);
   const isInitializedRef = useRef<boolean>(false);
 
-  // 初期化が完了したかどうかの状態
+  const lastStateHashRef = useRef<string>('');
+  const lastRenderTimeRef = useRef<number>(0);
+  const animationFrameIdRef = useRef<number | null>(null);
+
+  // 状態
   const [initializationComplete, setInitializationComplete] =
     useState<boolean>(false);
-
-  // 選択ユニットの状態
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
 
   // マップレンダラー
-  const { renderMap, resetAndRedraw } = useMapRenderer(mapContainerRef);
+  const { renderMap } = useMapRenderer(mapContainerRef);
 
   // ユニットレンダラー
   const { renderUnits, unitsRef } = useUnitRenderer(
@@ -62,7 +63,7 @@ export function useGameRenderer(
   const { startMoveAnimation } = useAnimation(gameSystemRef, unitsRef);
 
   // カメラ制御
-  const { centerCamera, panCameraToUnit } = useCamera(appRef, {
+  const { centerCamera } = useCamera(appRef, {
     mapContainer: mapContainerRef,
     unitContainer: unitContainerRef,
     overlayContainer: overlayContainerRef,
@@ -105,9 +106,16 @@ export function useGameRenderer(
   ]);
 
   // アプリの初期化
+  // useGameRenderer.tsの初期化部分
   useEffect(() => {
     if (!isAppInitialized) {
       console.log('アプリが初期化されていません');
+      return;
+    }
+
+    // すでに初期化済みならスキップ
+    if (isInitializedRef.current) {
+      console.log('レンダラーはすでに初期化されています');
       return;
     }
 
@@ -119,42 +127,29 @@ export function useGameRenderer(
       return;
     }
 
-    // すでに初期化されていればスキップ
-    if (isInitializedRef.current) {
-      console.log('レンダラーはすでに初期化されています');
+    // ゲームシステムの状態を確認
+    const gameSystem = gameSystemRef.current;
+    if (!gameSystem) {
+      console.error('ゲームシステムが初期化されていません');
       return;
     }
 
     try {
-      // 既存のコンテナをクリーンアップ（念のため）
-      if (
-        mapContainerRef.current &&
-        app.stage.children.includes(mapContainerRef.current)
-      ) {
+      // 既存のコンテナが存在する場合はクリーンアップ
+      if (mapContainerRef.current) {
         app.stage.removeChild(mapContainerRef.current);
-        mapContainerRef.current.destroy();
-        mapContainerRef.current = null;
+        mapContainerRef.current.destroy({ children: true });
       }
-
-      if (
-        unitContainerRef.current &&
-        app.stage.children.includes(unitContainerRef.current)
-      ) {
+      if (unitContainerRef.current) {
         app.stage.removeChild(unitContainerRef.current);
-        unitContainerRef.current.destroy();
-        unitContainerRef.current = null;
+        unitContainerRef.current.destroy({ children: true });
       }
-
-      if (
-        overlayContainerRef.current &&
-        app.stage.children.includes(overlayContainerRef.current)
-      ) {
+      if (overlayContainerRef.current) {
         app.stage.removeChild(overlayContainerRef.current);
-        overlayContainerRef.current.destroy();
-        overlayContainerRef.current = null;
+        overlayContainerRef.current.destroy({ children: true });
       }
 
-      // コンテナの作成
+      // 新しいコンテナを作成
       const mapContainer = new PIXI.Container();
       const unitContainer = new PIXI.Container();
       const overlayContainer = new PIXI.Container();
@@ -182,131 +177,104 @@ export function useGameRenderer(
 
       // 少し遅延させてから初期描画とイベントハンドラの設定
       setTimeout(() => {
-        console.log('遅延初期化の実行');
+        try {
+          console.log('遅延初期化の実行');
 
-        // ゲーム状態が存在するか確認
-        if (gameSystemRef.current) {
+          // 状態が有効かチェック
+          const state = gameSystem.getState();
+          if (!state) {
+            throw new Error('ゲーム状態が取得できません');
+          }
+
+          // ユニット配列が有効かチェック
+          if (!state.units || !Array.isArray(state.units)) {
+            throw new Error('ユニット配列が無効です');
+          }
+
+          // マップが有効かチェック
+          if (!state.map) {
+            throw new Error('マップが無効です');
+          }
+
           // 初期描画
-          const state = gameSystemRef.current.getState();
           renderMap(state);
           renderUnits(state);
+
+          // イベントハンドラの設定は一度だけ
+          setupEventHandlers();
+
+          // 初期化完了フラグを設定
+          setInitializationComplete(true);
+          console.log('レンダラー初期化完了');
+        } catch (error) {
+          console.error('遅延初期化エラー:', error);
         }
-
-        // イベントハンドラを明示的に設定
-        setupEventHandlers();
-
-        // 初期化完了フラグを設定
-        setInitializationComplete(true);
-
-        console.log('レンダラー初期化完了');
-      }, 100);
+      }, 300); // 遅延時間を少し長くする
     } catch (error) {
       console.error('レンダラー初期化エラー:', error);
     }
-
-    return () => {
-      // クリーンアップ処理
-      const app = appRef.current;
-      if (!app) return;
-
-      // コンテナのクリーンアップ
-      if (mapContainerRef.current && app.stage) {
-        try {
-          app.stage.removeChild(mapContainerRef.current);
-          mapContainerRef.current.destroy({ children: true });
-          mapContainerRef.current = null;
-        } catch (e) {
-          console.error('mapContainer クリーンアップエラー:', e);
-        }
-      }
-
-      if (unitContainerRef.current && app.stage) {
-        try {
-          app.stage.removeChild(unitContainerRef.current);
-          unitContainerRef.current.destroy({ children: true });
-          unitContainerRef.current = null;
-        } catch (e) {
-          console.error('unitContainer クリーンアップエラー:', e);
-        }
-      }
-
-      if (overlayContainerRef.current && app.stage) {
-        try {
-          app.stage.removeChild(overlayContainerRef.current);
-          overlayContainerRef.current.destroy({ children: true });
-          overlayContainerRef.current = null;
-        } catch (e) {
-          console.error('overlayContainer クリーンアップエラー:', e);
-        }
-      }
-
-      // 参照をクリア
-      isInitializedRef.current = false;
-      setInitializationComplete(false);
-    };
-  }, [isAppInitialized, appRef, centerCamera, setupEventHandlers]);
+  }, [isAppInitialized]);
 
   // アクティブユニットの変更を監視して自動的にカメラをパンする
-  useEffect(() => {
-    if (!isAppInitialized || !initializationComplete) return;
-
-    const checkActiveUnitChange = () => {
-      const gameSystem = gameSystemRef.current;
-      if (!gameSystem) return;
-
-      const state = gameSystem.getState();
-      const currentActiveUnitId = state.activeUnitId;
-
-      // 前回のアクティブユニットID
-      const lastActiveUnitIdKey = 'lastActiveUnitId';
-      const lastActiveUnitId = localStorage.getItem(lastActiveUnitIdKey);
-
-      // アクティブユニットが変わっていればカメラを移動
-      if (currentActiveUnitId && currentActiveUnitId !== lastActiveUnitId) {
-        console.log(
-          `アクティブユニットが変更されました: ${currentActiveUnitId}`
-        );
-        localStorage.setItem(lastActiveUnitIdKey, currentActiveUnitId);
-
-        // アクティブユニットの位置を取得
-        const activeUnit = state.units.find(
-          (unit) => unit.id === currentActiveUnitId
-        );
-
-        if (activeUnit) {
-          // ユニットの位置にカメラを移動
-          const tile = state.map.getTile(activeUnit.position);
-          const height = tile ? tile.height : 0;
-          panCameraToUnit(activeUnit, height);
-
-          // 通知メッセージを表示
-          if (window.showGameNotification) {
-            window.showGameNotification(`${activeUnit.name}の行動です`);
-          }
-        }
-      }
-    };
-
-    // 定期的にアクティブユニットをチェック
-    const intervalId = setInterval(checkActiveUnitChange, 300);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [isAppInitialized, initializationComplete, panCameraToUnit]);
-
-  // ゲーム状態が変更されたときの再描画
+  // ゲーム状態が変更されたときの再描画をsetIntervalからrequestAnimationFrameに変更
+  // useGameRenderer.ts のレンダリングループを修正
   useEffect(() => {
     if (!isAppInitialized || !initializationComplete) return;
 
     console.log('ゲーム状態更新監視を開始');
 
-    const intervalId = setInterval(() => {
-      renderGameState();
-    }, 100); // 100ms間隔で再描画
+    // 初期化
+    lastRenderTimeRef.current = performance.now();
+    const renderInterval = 500; // 500msに延長
+
+    const renderFrame = (timestamp: number) => {
+      // 一定間隔でのみレンダリング
+      if (timestamp - lastRenderTimeRef.current >= renderInterval) {
+        try {
+          // ゲーム状態が変化した場合のみ再描画
+          const gameSystem = gameSystemRef.current;
+          if (gameSystem) {
+            const state = gameSystem.getState();
+
+            // 状態のハッシュ化（簡易版）- 比較に必要な部分だけを含める
+            const stateHash = JSON.stringify({
+              activeUnitId: state.activeUnitId,
+              turnCount: state.turnCount,
+              unitsPos: state.units.map((u) => ({
+                id: u.id,
+                x: u.position.x,
+                y: u.position.y,
+                hp: u.stats.hp,
+                ct: u.stats.ct,
+              })),
+            });
+
+            // 前回と状態が異なる場合のみ再描画
+            if (stateHash !== lastStateHashRef.current) {
+              console.log('状態変更を検出、再描画を実行');
+              renderGameState();
+              lastStateHashRef.current = stateHash;
+            }
+          }
+
+          lastRenderTimeRef.current = timestamp;
+        } catch (error) {
+          console.error('レンダリングエラー:', error);
+        }
+      }
+
+      animationFrameIdRef.current = requestAnimationFrame(renderFrame);
+    };
+
+    // アニメーションフレームを開始
+    animationFrameIdRef.current = requestAnimationFrame(renderFrame);
 
     return () => {
-      clearInterval(intervalId);
+      // クリーンアップ：アニメーションフレームをキャンセル
+      if (animationFrameIdRef.current !== null) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
     };
   }, [isAppInitialized, initializationComplete]);
 
@@ -340,8 +308,17 @@ export function useGameRenderer(
       if (!gameSystem) return;
 
       const state = gameSystem.getState();
-      resetAndRedraw(state);
+
+      renderMap(state);
       renderUnits(state);
+
+      // 描画後の確認ログ
+      console.log(
+        '強制再描画完了 - タイル数:',
+        mapContainerRef.current?.children.length || 0,
+        'ユニット数:',
+        unitContainerRef.current?.children.length || 0
+      );
     } catch (error) {
       console.error('強制再描画エラー:', error);
     }
@@ -388,7 +365,7 @@ export function useGameRenderer(
     showActionRange,
     clearActionRange,
     handleActionSelect,
-    forceRedraw, // 必要に応じて外部から強制再描画できるようにエクスポート
-    isInitialized: initializationComplete, // 初期化状態を外部から確認できるようにエクスポート
+    forceRedraw,
+    isInitialized: initializationComplete,
   };
 }

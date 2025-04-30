@@ -42,7 +42,11 @@ export function useEventHandlers(
   ) => void,
   showMoveRange?: (unitId: string) => void,
   clearMoveRange?: () => void,
-  _showActionRange?: (unitId: string, actionType: string, range: number) => void,
+  _showActionRange?: (
+    unitId: string,
+    actionType: string,
+    range: number
+  ) => void,
   clearActionRange?: () => void,
   clearAllRanges?: () => void,
   startMoveAnimation?: (

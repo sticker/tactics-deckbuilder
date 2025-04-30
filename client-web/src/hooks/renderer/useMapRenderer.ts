@@ -21,6 +21,8 @@ export function useMapRenderer(
 
   // 最後に描画したマップデータ
   const lastMapDataRef = useRef<any>(null);
+  // マップハッシュを保存する参照を追加
+  const lastMapHashRef = useRef<string>('');
 
   // コンポーネントのマウント/アンマウント時の処理
   useEffect(() => {
@@ -60,10 +62,32 @@ export function useMapRenderer(
         return;
       }
 
-      console.log(`描画するタイル数: ${tilesData.length}`);
+      // 描画前の状態確認ログ
+      console.log(
+        `描画前タイル数: ${mapContainer.children.length}, 描画するタイル数: ${tilesData.length}`
+      );
 
-      // マップデータを保存（デバッグ用）
-      lastMapDataRef.current = tilesData;
+      // 前回のマップデータと比較するためのハッシュ作成
+      const mapHash = JSON.stringify(
+        tilesData.map((tile) => ({
+          x: tile.position.x,
+          y: tile.position.y,
+          h: tile.height,
+          p: tile.passable,
+        }))
+      );
+
+      // 強制再描画の場合はスキップしない
+      const forceRender = mapContainer.children.length === 0;
+
+      // 前回と同じマップデータなら描画をスキップ（ただしタイルが0の場合は強制描画）
+      if (lastMapHashRef.current === mapHash && !forceRender) {
+        console.log('マップデータに変更なし、描画スキップ');
+        return;
+      }
+
+      console.log(`描画するタイル数: ${tilesData.length}`);
+      lastMapHashRef.current = mapHash;
 
       // タイルの描画
       tilesData.forEach((tile: any) => {
@@ -84,7 +108,6 @@ export function useMapRenderer(
 
           if (!tileGraphic) {
             // 新しいタイルを作成
-            console.log(`新しいタイルを作成: ${tileKey}`);
             tileGraphic = new PIXI.Graphics();
             mapContainer.addChild(tileGraphic);
             tilesRef.current.set(tileKey, tileGraphic);
@@ -121,7 +144,10 @@ export function useMapRenderer(
         }
       });
 
-      console.log(`マップ描画完了: ${tilesData.length}タイル`);
+      // 描画後の確認ログ
+      console.log(
+        `マップ描画完了: ${tilesData.length}タイル, コンテナ内タイル数: ${mapContainer.children.length}`
+      );
     } catch (error) {
       console.error('マップ描画中にエラーが発生しました:', error);
     }
@@ -294,19 +320,33 @@ export function useMapRenderer(
     if (!mapContainer) return;
 
     try {
-      console.log('すべてのタイルをクリアします');
+      console.log(
+        `すべてのタイルをクリアします（現在のタイル数: ${mapContainer.children.length}）`
+      );
 
       // 既存のタイルをすべて削除
-      tilesRef.current.forEach((graphic) => {
+      tilesRef.current.forEach((graphic, key) => {
         try {
-          mapContainer.removeChild(graphic);
-          graphic.destroy();
+          if (mapContainer.children.includes(graphic)) {
+            mapContainer.removeChild(graphic);
+            graphic.destroy({
+              children: true,
+              texture: false,
+              baseTexture: false,
+            });
+            console.log(`タイル削除: ${key}`);
+          } else {
+            console.log(`タイル ${key} はすでにコンテナから削除されています`);
+          }
         } catch (e) {
           console.warn('タイル削除エラー:', e);
         }
       });
 
       tilesRef.current.clear();
+      console.log(
+        `タイルクリア完了（残りタイル数: ${mapContainer.children.length}）`
+      );
     } catch (error) {
       console.error('タイルクリア中にエラーが発生しました:', error);
     }
@@ -322,8 +362,15 @@ export function useMapRenderer(
       // すべてのタイルをクリア
       cleanupAllTiles();
 
-      // マップを再描画
-      renderMap(state);
+      // マップを再描画 - 強制的に実行されるよう確認
+      console.log('タイルクリア後に強制再描画を実行');
+      setTimeout(() => {
+        renderMap(state);
+        console.log(
+          '再描画完了確認:',
+          mapContainerRef.current?.children.length || 0
+        );
+      }, 0);
     } catch (error) {
       console.error('マップリセット中にエラーが発生しました:', error);
     }

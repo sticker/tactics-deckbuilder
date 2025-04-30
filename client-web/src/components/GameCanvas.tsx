@@ -39,8 +39,8 @@ const GameCanvas: React.FC = () => {
       // 基本的なPixiJSアプリケーションを作成（v7対応）
       const app = new PIXI.Application({
         backgroundColor: 0x0a0a23,
-        width: 800, // 固定サイズで開始
-        height: 600,
+        width: canvasRef.current.clientWidth || 800,
+        height: canvasRef.current.clientHeight || 600,
         antialias: true,
       });
 
@@ -57,13 +57,38 @@ const GameCanvas: React.FC = () => {
       // ゲームシステムの初期化
       const gameSystem = new GameSystem(13, 13);
 
-      // 初期状態の設定
+      // 一度だけ初期状態を設定
       try {
         console.log('ゲームシステムの初期状態を設定中...');
         gameSystem.setupInitialState();
-        console.log('ゲームシステムの初期状態設定完了');
+
+        // 初期状態が正しく設定されたか確認
+        const state = gameSystem.getState();
+        if (!state || !state.units || state.units.length === 0) {
+          throw new Error('ゲームシステムの初期状態が正しく設定されていません');
+        }
+
+        // 各ユニットにpositionがあるか確認
+        for (const unit of state.units) {
+          if (
+            !unit.position ||
+            typeof unit.position.x !== 'number' ||
+            typeof unit.position.y !== 'number'
+          ) {
+            throw new Error(
+              `ユニット ${unit.id} の位置が正しく設定されていません`
+            );
+          }
+        }
+
+        console.log(
+          'ゲームシステムの初期状態設定完了:',
+          state.units.length,
+          'ユニット初期化済み'
+        );
       } catch (error) {
         console.error('初期状態設定エラー:', error);
+        return; // 初期化に失敗した場合は処理を中断
       }
 
       // 参照を保存
@@ -75,11 +100,6 @@ const GameCanvas: React.FC = () => {
 
       console.log('ゲーム初期化完了');
       setAppInitialized(true);
-
-      // 初期化直後にデバッグ情報を出力
-      setTimeout(() => {
-        debugGameSystem(gameSystem);
-      }, 500);
     } catch (error) {
       console.error('ゲーム初期化エラー:', error);
     }
@@ -87,7 +107,7 @@ const GameCanvas: React.FC = () => {
     return () => {
       // クリーンアップ処理
       if (appRef.current) {
-        appRef.current.destroy(true);
+        appRef.current.destroy(true, { children: true });
         appRef.current = null;
       }
       window.removeEventListener('keydown', handleDebugKeyDown);
@@ -234,20 +254,16 @@ const GameCanvas: React.FC = () => {
   };
 
   // ゲームレンダラーのセットアップ（アプリ初期化後のみ）
-  const {
-    selectedUnitId,
-    handleActionSelect,
-    forceRedraw,
-    isInitialized,
-  } = useGameRenderer(
-    appRef,
-    gameSystemRef,
-    appInitialized,
-    currentActionType,
-    connectionState,
-    moveUnit,
-    executeAction
-  );
+  const { selectedUnitId, handleActionSelect, forceRedraw, isInitialized } =
+    useGameRenderer(
+      appRef,
+      gameSystemRef,
+      appInitialized,
+      currentActionType,
+      connectionState,
+      moveUnit,
+      executeAction
+    );
 
   // ゲームループのセットアップ
   useGameLoop(gameSystemRef);

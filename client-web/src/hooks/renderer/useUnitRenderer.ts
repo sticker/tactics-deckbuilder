@@ -14,6 +14,8 @@ export function useUnitRenderer(
 ) {
   // ユニットのグラフィックスを保持する参照
   const unitsRef = useRef<Map<string, PIXI.Graphics>>(new Map());
+  // ユニットハッシュを保存する参照を追加
+  const lastUnitsHashRef = useRef<string>('');
 
   /**
    * ユニットの描画
@@ -27,7 +29,26 @@ export function useUnitRenderer(
     }
 
     try {
+      // ユニットデータのハッシュ作成
+      const unitsHash = JSON.stringify(
+        state.units.map((unit) => ({
+          id: unit.id,
+          x: unit.position.x,
+          y: unit.position.y,
+          hp: unit.stats.hp,
+          ct: unit.stats.ct,
+          active: unit.id === state.activeUnitId,
+          selected: unit.id === selectedUnitId,
+        }))
+      );
+
+      // 前回と同じユニットデータなら描画をスキップ
+      if (lastUnitsHashRef.current === unitsHash) {
+        return;
+      }
+
       console.log('ユニット描画開始: ' + state.units.length + '体');
+      lastUnitsHashRef.current = unitsHash;
 
       // 現在のユニットをクリア（存在しないユニットのグラフィックスを削除）
       unitsRef.current.forEach((graphic, id) => {
@@ -45,8 +66,18 @@ export function useUnitRenderer(
       // ユニットの描画
       state.units.forEach((unit) => {
         try {
-          if (!unit || !unit.position) {
-            console.warn('無効なユニット情報:', unit);
+          // 重要: unit と position の null チェックを強化
+          if (!unit) {
+            console.warn('ユニットがnullです');
+            return;
+          }
+
+          if (
+            !unit.position ||
+            typeof unit.position.x !== 'number' ||
+            typeof unit.position.y !== 'number'
+          ) {
+            console.warn('無効なユニット位置:', unit.id, unit.position);
             return;
           }
 
@@ -61,9 +92,23 @@ export function useUnitRenderer(
           }
 
           // タイルの座標をアイソメトリックに変換
-          const tile = state.map.getTile(unit.position);
+          // 追加のnullチェック
+          const tile =
+            state.map && state.map.getTile
+              ? state.map.getTile(unit.position)
+              : null;
           const height = tile ? tile.height : 0;
           const { x, y } = isoToScreen(unit.position, height);
+
+          // NaN チェックを追加
+          if (isNaN(x) || isNaN(y)) {
+            console.warn(
+              `無効な座標が計算されました: ユニットID=${
+                unit.id
+              }, 位置=${JSON.stringify(unit.position)}`
+            );
+            return;
+          }
 
           unitGraphic.position.set(x, y);
 
@@ -91,10 +136,18 @@ export function useUnitRenderer(
           unitGraphic.endFill();
 
           // CTゲージの描画
-          drawChargeTimeBar(unitGraphic, unit.stats.ct);
+          if (unit.stats && typeof unit.stats.ct === 'number') {
+            drawChargeTimeBar(unitGraphic, unit.stats.ct);
+          }
 
           // HPバーの描画
-          drawHealthBar(unitGraphic, unit.stats.hp, unit.stats.maxHp);
+          if (
+            unit.stats &&
+            typeof unit.stats.hp === 'number' &&
+            typeof unit.stats.maxHp === 'number'
+          ) {
+            drawHealthBar(unitGraphic, unit.stats.hp, unit.stats.maxHp);
+          }
         } catch (error) {
           console.error('ユニット描画エラー:', error, 'ユニット:', unit);
         }
