@@ -6,7 +6,6 @@ import {
   isoToScreen,
   screenToIso,
   isTileHit,
-  isInActionRange,
 } from '../../utils/isoConversion';
 import { findPath } from '../../utils/pathfinding';
 import {
@@ -474,56 +473,50 @@ export function useEventHandlers(
     return null;
   };
 
-  /**
-   * ユニットクリック時の処理
-   */
+  // src/hooks/renderer/useEventHandlers.ts の修正部分
+
+  // アクション実行の処理
+  const handleActionClick = (targetUnitId: string) => {
+    if (!gameSystemRef.current || !selectedUnitId || !currentActionType) return;
+
+    console.log(
+      `アクション実行: ${currentActionType} ${selectedUnitId} ${targetUnitId}`
+    );
+
+    const gameSystem = gameSystemRef.current;
+    const state = gameSystem.getState();
+
+    // 対象ユニットの位置を取得
+    const targetUnit = state.units.find((unit) => unit.id === targetUnitId);
+    if (!targetUnit) {
+      console.error('対象ユニットが見つかりません');
+      return;
+    }
+
+    // executeAction関数を呼び出し
+    if (executeAction) {
+      executeAction(
+        selectedUnitId,
+        targetUnitId,
+        targetUnit.position, // ユニットの位置情報も渡す
+        currentActionType
+      );
+    }
+  };
+
+  // ユニットクリック時の処理
   const handleUnitClick = (clickedUnit: Unit) => {
     // 既に選択されているユニットがあり、アクションが選択されている場合
-    if (
-      selectedUnitIdRef.current &&
-      currentActionTypeRef.current &&
-      currentActionTypeRef.current !== 'move'
-    ) {
-      const gameSystem = gameSystemRef.current;
-      if (!gameSystem) return;
+    if (selectedUnitId && currentActionType && currentActionType !== 'move') {
+      console.log('アクション対象が選択されました:', clickedUnit.id);
 
-      const sourceUnit = gameSystem
-        .getState()
-        .units.find((unit) => unit.id === selectedUnitIdRef.current);
+      // アクション実行処理に移行
+      handleActionClick(clickedUnit.id);
 
-      if (sourceUnit && executeAction) {
-        // アクションの種類に応じた範囲をチェック
-        const range = currentActionTypeRef.current.startsWith('attack') ? 1 : 2;
-        if (
-          !isInActionRange(sourceUnit.position, clickedUnit.position, range)
-        ) {
-          console.log('対象が範囲外です');
-          if (window.showGameNotification) {
-            window.showGameNotification('対象が範囲外です');
-          }
-          return;
-        }
-
-        console.log(
-          'アクション実行:',
-          currentActionTypeRef.current,
-          sourceUnit.id,
-          clickedUnit.id
-        );
-
-        // アクション実行
-        executeAction(
-          sourceUnit.id,
-          clickedUnit.id,
-          clickedUnit.position,
-          currentActionTypeRef.current
-        );
-
-        // アクション実行後、選択とアクション表示をクリア
-        if (clearAllRanges) clearAllRanges();
-        setSelectedUnitId(null);
-        return;
-      }
+      // アクション実行後、選択とアクション表示をクリア
+      if (clearAllRanges) clearAllRanges();
+      setSelectedUnitId(null);
+      return;
     }
 
     // 既存の選択をクリア
@@ -590,9 +583,7 @@ export function useEventHandlers(
     }
   };
 
-  /**
-   * 移動アクション処理
-   */
+  // 移動アクション処理
   const handleMoveAction = (
     unit: Unit,
     targetPosition: Position,
@@ -601,11 +592,22 @@ export function useEventHandlers(
     const gameSystem = gameSystemRef.current;
     if (!gameSystem) return;
 
+    console.log('移動処理開始:', {
+      unitId: unit.id,
+      isActive: isActiveUnit,
+      targetPos: targetPosition,
+    });
+
     // 移動可能範囲をチェック
     const movePositions = gameSystem.getUnitMoveRange(unit.id);
+    console.log('移動可能範囲:', movePositions.length, '箇所');
+
+    // 移動可能範囲内かチェック
     const canMoveToPosition = movePositions.some(
       (pos) => pos.x === targetPosition.x && pos.y === targetPosition.y
     );
+
+    console.log('移動可能判定:', canMoveToPosition);
 
     if (isActiveUnit && canMoveToPosition) {
       executeUnitMove(unit.id, targetPosition);
@@ -613,9 +615,15 @@ export function useEventHandlers(
       // 移動できない場合は選択解除
       if (!isActiveUnit) {
         console.log('このユニットは現在行動できません');
+        if (window.showGameNotification) {
+          window.showGameNotification('このユニットは現在行動できません');
+        }
       }
       if (!canMoveToPosition) {
         console.log('選択された位置は移動可能範囲外です');
+        if (window.showGameNotification) {
+          window.showGameNotification('移動可能範囲外です');
+        }
       }
 
       // 選択を解除

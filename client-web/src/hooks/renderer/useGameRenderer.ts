@@ -8,7 +8,6 @@ import { useRangeRenderer } from './useRangeRenderer';
 import { useEventHandlers } from './useEventHandlers';
 import { useAnimation } from './useAnimation';
 import { useCamera } from './useCamera';
-import { GameConnectionState } from '../useGameConnection';
 
 /**
  * ゲームレンダリングを統合管理するメインフック
@@ -18,13 +17,12 @@ export function useGameRenderer(
   gameSystemRef: React.RefObject<GameSystem | null>,
   isAppInitialized: boolean = false,
   currentActionType: string | null,
-  _connectionState?: GameConnectionState,
-  moveUnit?: (unitId: string, targetPosition: Position) => void,
-  executeAction?: (
+  _connectionState?: any, // 未使用パラメータ名の前に_をつける
+  executeUnitMove?: (unitId: string, targetPosition: Position) => void,
+  executeAbility?: (
     sourceUnitId: string,
     targetUnitId: string,
-    targetPosition: Position,
-    actionType: string
+    abilityId: string
   ) => void
 ) {
   const mapContainerRef = useRef<PIXI.Container | null>(null);
@@ -69,6 +67,23 @@ export function useGameRenderer(
     overlayContainer: overlayContainerRef,
   });
 
+  // executeAbilityをuseEventHandlersに渡すためのアダプター関数
+  const executeActionAdapter = executeAbility
+    ? (
+        sourceUnitId: string,
+        targetUnitId: string,
+        _targetPosition: Position,
+        actionType: string
+      ) => {
+        console.log('アクションアダプター呼び出し:', {
+          sourceUnitId,
+          targetUnitId,
+          actionType,
+        });
+        executeAbility(sourceUnitId, targetUnitId, actionType);
+      }
+    : undefined;
+
   // イベントハンドラ
   const { setupEventHandlers } = useEventHandlers(
     gameSystemRef,
@@ -78,8 +93,8 @@ export function useGameRenderer(
     selectedUnitId,
     setSelectedUnitId,
     currentActionType,
-    moveUnit,
-    executeAction,
+    executeUnitMove,
+    executeActionAdapter, // アダプター関数を渡す
     showMoveRange,
     clearMoveRange,
     showActionRange,
@@ -106,7 +121,6 @@ export function useGameRenderer(
   ]);
 
   // アプリの初期化
-  // useGameRenderer.tsの初期化部分
   useEffect(() => {
     if (!isAppInitialized) {
       console.log('アプリが初期化されていません');
@@ -217,7 +231,6 @@ export function useGameRenderer(
 
   // アクティブユニットの変更を監視して自動的にカメラをパンする
   // ゲーム状態が変更されたときの再描画をsetIntervalからrequestAnimationFrameに変更
-  // useGameRenderer.ts のレンダリングループを修正
   useEffect(() => {
     if (!isAppInitialized || !initializationComplete) return;
 
@@ -348,12 +361,13 @@ export function useGameRenderer(
     if (actionType === 'move') {
       // 移動範囲表示
       showMoveRange(unitId);
-    } else if (actionType.startsWith('attack')) {
-      // 攻撃範囲表示
-      showActionRange(unitId, 'attack', 1); // 攻撃範囲1
-    } else if (actionType.startsWith('heal')) {
-      // 回復範囲表示
-      showActionRange(unitId, 'heal', 2); // 回復範囲2
+    } else {
+      // アビリティの場合はアクション範囲表示
+      const ability = gameSystem.getAbility(actionType);
+      if (ability) {
+        const range = ability.range || 1;
+        showActionRange(unitId, ability.type, range);
+      }
     }
   };
 

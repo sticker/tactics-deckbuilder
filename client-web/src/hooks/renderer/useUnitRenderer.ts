@@ -5,6 +5,54 @@ import * as PIXI from 'pixi.js';
 import { BattleState } from 'game-logic';
 import { isoToScreen } from '../../utils/isoConversion';
 import { TILE_WIDTH, TILE_HEIGHT } from '../../utils/constants';
+import { Direction } from 'game-logic/src/models/Unit';
+
+// スプライト画像を管理するためのキャッシュ
+const spriteTextureCache: Record<string, PIXI.Texture> = {};
+
+/**
+ * スプライトテクスチャのロードと取得
+ * @param job ジョブタイプ
+ * @param direction 向き
+ * @param teamId チームID
+ */
+function getUnitTexture(
+  job: string,
+  direction: Direction,
+  teamId: number
+): PIXI.Texture {
+  // スプライトのキー（ジョブタイプと向きの組み合わせ）
+  const spriteKey = `${job.toLowerCase()}_${teamId}_${direction}`;
+
+  // キャッシュにあればそれを返す
+  if (spriteTextureCache[spriteKey]) {
+    return spriteTextureCache[spriteKey];
+  }
+
+  // キャッシュになければ新しく作成
+  try {
+    // スプライトのパス
+    const spritePath = `/assets/sprites/${job.toLowerCase()}/${direction}.png`;
+    const texture = PIXI.Texture.from(spritePath);
+
+    // 読み込みエラー対応
+    texture.on('error', () => {
+      console.warn(`スプライト読み込みエラー: ${spritePath}`);
+      // フォールバックとして向き別デフォルト画像を使用
+      spriteTextureCache[spriteKey] = PIXI.Texture.from(
+        `/assets/sprites/default/${direction}.png`
+      );
+    });
+
+    // キャッシュに保存
+    spriteTextureCache[spriteKey] = texture;
+    return texture;
+  } catch (error) {
+    console.error('テクスチャロードエラー:', error);
+    // エラー時はデフォルトテクスチャを返す
+    return PIXI.Texture.WHITE;
+  }
+}
 
 /**
  * ユニットレンダリングを管理するフック
@@ -42,6 +90,7 @@ export function useUnitRenderer(
           active: unit.id === state.activeUnitId,
           selected: unit.id === selectedUnitId,
           direction: unit.direction || 'south', // 方向情報を追加
+          actionState: unit.actionState, // 行動状態も追加
         }))
       );
 
@@ -89,22 +138,17 @@ export function useUnitRenderer(
           // ユニットの向き（デフォルトは南向き）
           const direction = unit.direction || 'south';
 
-          // スプライトのキー（ジョブタイプと向きの組み合わせ）
-          const spriteKey = `${unit.job}_${direction}`;
-
           if (!unitSprite) {
             // 新しいスプライトを作成
-            const texture = PIXI.Texture.from(
-              `/assets/sprites/${spriteKey}.png`
-            );
+            const texture = getUnitTexture(unit.job, direction, unit.teamId);
             unitSprite = new PIXI.Sprite(texture);
 
             // スプライトの設定
             unitSprite.anchor.set(0.5, 0.75); // 足元中心に設定
 
             // サイズを固定 - タイルサイズに合わせて調整
-            const fixedWidth = TILE_WIDTH * 1.2; // タイル幅の1.2倍の幅
-            const fixedHeight = TILE_HEIGHT * 2; // タイル高さの2倍の高さ
+            const fixedWidth = TILE_WIDTH * 1.5; // タイル幅の1.5倍の幅
+            const fixedHeight = TILE_HEIGHT * 2.5; // タイル高さの2.5倍の高さ
 
             // 幅と高さを直接設定
             unitSprite.width = fixedWidth;
@@ -115,13 +159,15 @@ export function useUnitRenderer(
             console.log(`新しいユニットスプライトを作成: ${unit.id}`);
           } else {
             // 既存のスプライトの場合、向きに応じてテクスチャを更新
-            unitSprite.texture = PIXI.Texture.from(
-              `/assets/sprites/${spriteKey}.png`
+            unitSprite.texture = getUnitTexture(
+              unit.job,
+              direction,
+              unit.teamId
             );
 
             // テクスチャが変わっても固定サイズを維持
-            const fixedWidth = TILE_WIDTH * 1.2;
-            const fixedHeight = TILE_HEIGHT * 2;
+            const fixedWidth = TILE_WIDTH * 1.5;
+            const fixedHeight = TILE_HEIGHT * 2.5;
             unitSprite.width = fixedWidth;
             unitSprite.height = fixedHeight;
           }
@@ -146,9 +192,6 @@ export function useUnitRenderer(
 
           unitSprite.position.set(x, y);
 
-          // チームによって色合いを変える（オプション）
-          const teamTint = unit.teamId === 0 ? 0xffffff : 0xffdddd;
-
           // ユニットが選択されているか、行動可能かによって強調表示
           const isSelected = unit.id === selectedUnitId;
           const isActive = unit.id === state.activeUnitId;
@@ -161,9 +204,27 @@ export function useUnitRenderer(
             unitSprite.tint = 0xaaffff;
           } else {
             // 通常状態（チームカラー）
-            unitSprite.tint = teamTint;
+            unitSprite.tint = 0xffffff; // 本来のスプライト色
           }
 
+          // 行動状態に応じた表示
+          switch (unit.actionState) {
+            case 'moved':
+              // 移動済み（やや暗く）
+              unitSprite.alpha = 0.8;
+              break;
+            case 'action_used':
+              // アクション使用済み（さらに暗く）
+              unitSprite.alpha = 0.7;
+              break;
+            case 'turn_ended':
+              // ターン終了（かなり暗く）
+              unitSprite.alpha = 0.5;
+              break;
+            default:
+              // 待機中（通常）
+              unitSprite.alpha = 1.0;
+          }
         } catch (error) {
           console.error('ユニット描画エラー:', error, 'ユニット:', unit);
         }

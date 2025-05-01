@@ -11,6 +11,7 @@ import {
   debugContainers,
   forceInitializeGameSystem,
 } from '../utils/debugHelpers';
+import { ActionState } from 'game-logic/src/models/Unit';
 
 const GameCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -18,9 +19,9 @@ const GameCanvas: React.FC = () => {
   const gameSystemRef = useRef<GameSystem | null>(null);
   const [appInitialized, setAppInitialized] = useState(false);
   const [_, setForceUpdate] = useState(0);
-  const [currentActionType, setCurrentActionType] = useState<string | null>(
-    null
-  );
+  const [currentAbilityId, setCurrentAbilityId] = useState<string | null>(null);
+  const [targetSelectionMode, setTargetSelectionMode] =
+    useState<boolean>(false);
 
   // デバッグ用の状態
   const [debugMode, setDebugMode] = useState(false);
@@ -189,55 +190,45 @@ const GameCanvas: React.FC = () => {
     handleStateUpdate
   );
 
-  // アクションの実行処理
-  const executeAction = (
+  // アビリティ実行処理
+  const executeAbility = (
     sourceUnitId: string,
     targetUnitId: string,
-    targetPosition: Position,
-    actionType: string
+    abilityId: string
   ) => {
     if (!gameSystemRef.current) return;
 
-    console.log(
-      `アクション実行開始: ${actionType}`,
-      sourceUnitId,
-      targetUnitId
-    );
+    console.log(`アビリティ実行開始: ${abilityId}`, sourceUnitId, targetUnitId);
 
     const gameSystem = gameSystemRef.current;
 
-    // アクションタイプを引数から直接使用
-    const result = gameSystem.executeAction(
+    // アビリティを実行
+    const result = gameSystem.executeAbility(
       sourceUnitId,
-      actionType,
-      targetUnitId,
-      targetPosition
+      abilityId,
+      targetUnitId
     );
 
     if (result.success) {
-      console.log(`${actionType}アクション成功!`);
+      console.log(`${abilityId}アビリティ成功!`);
       if (window.showGameNotification) {
-        window.showGameNotification(
-          `${
-            actionType.startsWith('attack') ? '攻撃' : '回復'
-          }アクションを実行しました`
-        );
+        window.showGameNotification(`${abilityId}を実行しました！`);
       }
     } else {
-      console.log('アクション実行失敗:', result.reason);
+      console.log('アビリティ実行失敗:', result.reason);
 
       // エラー理由に応じたメッセージを表示
       if (window.showGameNotification) {
-        let errorMessage = 'アクションの実行に失敗しました';
+        let errorMessage = 'アビリティの実行に失敗しました';
 
-        if (result.reason === 'active_unit_check_failed') {
-          // 既に行動済みかどうかのチェックが原因の場合は通知しない
-          // (二重クリックの場合は通知しない)
-          return;
+        if (result.reason === 'not_active_unit') {
+          errorMessage = 'このユニットは現在行動できません';
         } else if (result.reason === 'target_out_of_range') {
           errorMessage = '対象が範囲外です';
-        } else if (result.reason === 'unit_not_found') {
-          errorMessage = 'ユニットが見つかりません';
+        } else if (result.reason === 'target_unit_not_found') {
+          errorMessage = '対象のユニットが見つかりません';
+        } else if (result.reason === 'cannot_use_ability') {
+          errorMessage = 'このアビリティは現在使用できません';
         }
 
         window.showGameNotification(errorMessage);
@@ -245,12 +236,43 @@ const GameCanvas: React.FC = () => {
     }
 
     // 状態をリセット
-    setCurrentActionType(null);
+    setCurrentAbilityId(null);
+    setTargetSelectionMode(false);
 
     // アクション実行後に強制的に再レンダリング
     setTimeout(() => {
       handleStateUpdate();
     }, 100);
+  };
+
+  // ユニット移動の実行処理
+  const executeUnitMove = (unitId: string, targetPosition: Position) => {
+    if (!gameSystemRef.current) return;
+
+    console.log(`ユニット移動実行: ${unitId} -> `, targetPosition);
+
+    const gameSystem = gameSystemRef.current;
+    const success = gameSystem.moveUnit(unitId, targetPosition);
+
+    if (success) {
+      console.log('移動成功');
+      if (window.showGameNotification) {
+        window.showGameNotification('移動完了');
+      }
+
+      // 必要に応じてサーバーに移動を通知
+      if (moveUnit) {
+        moveUnit(unitId, targetPosition);
+      }
+    } else {
+      console.log('移動失敗');
+      if (window.showGameNotification) {
+        window.showGameNotification('移動失敗');
+      }
+    }
+
+    // 状態更新通知
+    handleStateUpdate();
   };
 
   // ゲームレンダラーのセットアップ（アプリ初期化後のみ）
@@ -259,10 +281,10 @@ const GameCanvas: React.FC = () => {
       appRef,
       gameSystemRef,
       appInitialized,
-      currentActionType,
+      currentAbilityId,
       connectionState,
-      moveUnit,
-      executeAction
+      executeUnitMove,
+      executeAbility
     );
 
   // ゲームループのセットアップ
@@ -305,11 +327,18 @@ const GameCanvas: React.FC = () => {
     }
   }, [isInitialized, forceRedraw]);
 
-  // アクション選択のハンドラー
-  const onActionSelect = (actionType: string, unitId: string) => {
+  // アビリティ選択のハンドラー
+  const onAbilitySelect = (abilityId: string, unitId: string) => {
     if (!gameSystemRef.current) return;
 
-    console.log(`アクション選択: ${actionType} (ユニット: ${unitId})`);
+    console.log(`アビリティ選択: ${abilityId} (ユニット: ${unitId})`);
+
+    // 空文字の場合は選択解除
+    if (!abilityId) {
+      setCurrentAbilityId(null);
+      setTargetSelectionMode(false);
+      return;
+    }
 
     const gameSystem = gameSystemRef.current;
     const state = gameSystem.getState();
@@ -317,19 +346,106 @@ const GameCanvas: React.FC = () => {
 
     if (!unit) return;
 
-    // 選択済みのアクションを再度クリックした場合は選択解除
-    if (currentActionType === actionType) {
-      console.log('アクション選択解除');
-      setCurrentActionType(null);
+    // パスの場合は特別処理
+    if (abilityId === 'pass') {
+      handleActionPass(unit.id);
       return;
     }
 
-    // 現在のアクションを設定
-    console.log('アクションタイプをセット:', actionType);
-    setCurrentActionType(actionType);
+    // 選択済みのアビリティを再度クリックした場合は選択解除
+    if (currentAbilityId === abilityId) {
+      console.log('アビリティ選択解除');
+      setCurrentAbilityId(null);
+      setTargetSelectionMode(false);
+      return;
+    }
+
+    const ability = gameSystem.getAbility(abilityId);
+
+    if (!unit || !ability) return;
+
+    // 選択済みのアビリティを再度クリックした場合は選択解除
+    if (currentAbilityId === abilityId) {
+      console.log('アビリティ選択解除');
+      setCurrentAbilityId(null);
+      setTargetSelectionMode(false);
+      return;
+    }
+
+    // ユニットが行動可能かチェック
+    if (
+      state.activeUnitId !== unitId ||
+      unit.actionState === ActionState.ACTION_USED ||
+      unit.actionState === ActionState.TURN_ENDED
+    ) {
+      console.log('このユニットは現在このアビリティを使用できません');
+      if (window.showGameNotification) {
+        window.showGameNotification(
+          'このユニットは現在このアビリティを使用できません'
+        );
+      }
+      return;
+    }
+
+    // アビリティが使用可能かチェック
+    if (!ability.canUse(unit, state)) {
+      console.log('このアビリティは現在使用できません');
+      if (window.showGameNotification) {
+        window.showGameNotification('このアビリティは現在使用できません');
+      }
+      return;
+    }
+
+    // 現在のアビリティをセット
+    console.log('アビリティをセット:', abilityId);
+    setCurrentAbilityId(abilityId);
+    setTargetSelectionMode(true);
 
     // アクション選択ハンドラを呼び出し
-    handleActionSelect(actionType, unitId);
+    handleActionSelect(abilityId, unitId);
+  };
+
+  // アクションパス処理
+  const handleActionPass = (unitId: string) => {
+    if (!gameSystemRef.current) return;
+
+    const gameSystem = gameSystemRef.current;
+    const state = gameSystem.getState();
+
+    // アクティブユニットかチェック
+    if (state.activeUnitId !== unitId) {
+      console.log('このユニットは現在行動できません');
+      if (window.showGameNotification) {
+        window.showGameNotification('このユニットは現在行動できません');
+      }
+      return;
+    }
+
+    // 行動をパスし、アクション済み状態に更新
+    const unit = state.units.find((u) => u.id === unitId);
+    if (!unit) return;
+
+    // アクション使用済みとしてマーク
+    const result = gameSystem.markActionUsed(unitId);
+
+    if (result.success) {
+      console.log('アクションパス成功');
+      if (window.showGameNotification) {
+        window.showGameNotification('アクションをパスしました');
+      }
+    } else {
+      console.log('アクションパス失敗:', result.reason);
+      if (window.showGameNotification) {
+        window.showGameNotification('アクションパスに失敗しました');
+      }
+    }
+
+    // 状態をリセット
+    setCurrentAbilityId(null);
+    setTargetSelectionMode(false);
+
+    // 状態更新通知
+    handleStateUpdate();
   };
 
   // デバッグモード用のUI
@@ -371,9 +487,16 @@ const GameCanvas: React.FC = () => {
         gameSystem={gameSystemRef.current}
         selectedUnitId={selectedUnitId}
         connectionState={connectionState}
-        onActionSelect={onActionSelect}
-        currentActionType={currentActionType}
+        onActionSelect={onAbilitySelect}
+        currentAbilityId={currentAbilityId}
       />
+
+      {/* ターゲット選択モード表示 */}
+      {targetSelectionMode && currentAbilityId && (
+        <div className='absolute top-24 left-1/2 transform -translate-x-1/2 bg-indigo-900 bg-opacity-90 text-white px-4 py-2 rounded-md shadow-lg z-20 text-center'>
+          対象を選択してください
+        </div>
+      )}
 
       {renderDebugUI()}
     </div>
