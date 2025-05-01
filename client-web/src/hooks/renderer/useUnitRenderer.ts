@@ -1,9 +1,10 @@
 // src/hooks/renderer/useUnitRenderer.ts
+
 import { useRef } from 'react';
 import * as PIXI from 'pixi.js';
 import { BattleState } from 'game-logic';
 import { isoToScreen } from '../../utils/isoConversion';
-import { TILE_WIDTH, TILE_HEIGHT, COLORS } from '../../utils/constants';
+import { TILE_WIDTH, TILE_HEIGHT } from '../../utils/constants';
 
 /**
  * ユニットレンダリングを管理するフック
@@ -12,9 +13,10 @@ export function useUnitRenderer(
   unitContainerRef: React.RefObject<PIXI.Container | null>,
   selectedUnitId: string | null
 ) {
-  // ユニットのグラフィックスを保持する参照
-  const unitsRef = useRef<Map<string, PIXI.Graphics>>(new Map());
-  // ユニットハッシュを保存する参照を追加
+  // ユニットのスプライトを保持する参照（ここを変更）
+  const unitsRef = useRef<Map<string, PIXI.Sprite>>(new Map());
+
+  // ユニットハッシュを保存する参照
   const lastUnitsHashRef = useRef<string>('');
 
   /**
@@ -39,6 +41,7 @@ export function useUnitRenderer(
           ct: unit.stats.ct,
           active: unit.id === state.activeUnitId,
           selected: unit.id === selectedUnitId,
+          direction: unit.direction || 'south', // 方向情報を追加
         }))
       );
 
@@ -50,12 +53,12 @@ export function useUnitRenderer(
       console.log('ユニット描画開始: ' + state.units.length + '体');
       lastUnitsHashRef.current = unitsHash;
 
-      // 現在のユニットをクリア（存在しないユニットのグラフィックスを削除）
-      unitsRef.current.forEach((graphic, id) => {
+      // 現在のユニットをクリア（存在しないユニットのスプライトを削除）
+      unitsRef.current.forEach((sprite, id) => {
         if (!state.units.some((unit) => unit.id === id)) {
           try {
-            unitContainer.removeChild(graphic);
-            graphic.destroy();
+            unitContainer.removeChild(sprite);
+            sprite.destroy();
             unitsRef.current.delete(id);
           } catch (error) {
             console.error('ユニット削除エラー:', error);
@@ -81,18 +84,49 @@ export function useUnitRenderer(
             return;
           }
 
-          let unitGraphic = unitsRef.current.get(unit.id);
+          let unitSprite = unitsRef.current.get(unit.id);
 
-          if (!unitGraphic) {
-            // 新しいユニットを作成
-            unitGraphic = new PIXI.Graphics();
-            unitContainer.addChild(unitGraphic);
-            unitsRef.current.set(unit.id, unitGraphic);
-            console.log(`新しいユニットを作成: ${unit.id}`);
+          // ユニットの向き（デフォルトは南向き）
+          const direction = unit.direction || 'south';
+
+          // スプライトのキー（ジョブタイプと向きの組み合わせ）
+          const spriteKey = `${unit.job}_${direction}`;
+
+          if (!unitSprite) {
+            // 新しいスプライトを作成
+            const texture = PIXI.Texture.from(
+              `/assets/sprites/${spriteKey}.png`
+            );
+            unitSprite = new PIXI.Sprite(texture);
+
+            // スプライトの設定
+            unitSprite.anchor.set(0.5, 0.75); // 足元中心に設定
+
+            // サイズを固定 - タイルサイズに合わせて調整
+            const fixedWidth = TILE_WIDTH * 1.2; // タイル幅の1.2倍の幅
+            const fixedHeight = TILE_HEIGHT * 2; // タイル高さの2倍の高さ
+
+            // 幅と高さを直接設定
+            unitSprite.width = fixedWidth;
+            unitSprite.height = fixedHeight;
+
+            unitContainer.addChild(unitSprite);
+            unitsRef.current.set(unit.id, unitSprite);
+            console.log(`新しいユニットスプライトを作成: ${unit.id}`);
+          } else {
+            // 既存のスプライトの場合、向きに応じてテクスチャを更新
+            unitSprite.texture = PIXI.Texture.from(
+              `/assets/sprites/${spriteKey}.png`
+            );
+
+            // テクスチャが変わっても固定サイズを維持
+            const fixedWidth = TILE_WIDTH * 1.2;
+            const fixedHeight = TILE_HEIGHT * 2;
+            unitSprite.width = fixedWidth;
+            unitSprite.height = fixedHeight;
           }
 
           // タイルの座標をアイソメトリックに変換
-          // 追加のnullチェック
           const tile =
             state.map && state.map.getTile
               ? state.map.getTile(unit.position)
@@ -110,44 +144,26 @@ export function useUnitRenderer(
             return;
           }
 
-          unitGraphic.position.set(x, y);
+          unitSprite.position.set(x, y);
 
-          // ユニットを描画
-          unitGraphic.clear();
-
-          // チームによって色を変える
-          const teamColor =
-            unit.teamId === 0 ? COLORS.TEAM_BLUE : COLORS.TEAM_RED;
+          // チームによって色合いを変える（オプション）
+          const teamTint = unit.teamId === 0 ? 0xffffff : 0xffdddd;
 
           // ユニットが選択されているか、行動可能かによって強調表示
           const isSelected = unit.id === selectedUnitId;
           const isActive = unit.id === state.activeUnitId;
-          const borderColor = isSelected
-            ? COLORS.SELECTED
-            : isActive
-            ? COLORS.ACTIVE
-            : COLORS.DEFAULT_BORDER;
-          const borderWidth = isSelected || isActive ? 3 : 1;
 
-          // ユニットの描画（円形で表現）
-          unitGraphic.beginFill(teamColor, 0.8);
-          unitGraphic.lineStyle(borderWidth, borderColor, 1);
-          unitGraphic.drawCircle(0, -TILE_HEIGHT / 4, TILE_WIDTH / 4);
-          unitGraphic.endFill();
-
-          // CTゲージの描画
-          if (unit.stats && typeof unit.stats.ct === 'number') {
-            drawChargeTimeBar(unitGraphic, unit.stats.ct);
+          if (isSelected) {
+            // 選択状態（黄色いハイライト）
+            unitSprite.tint = 0xffff99;
+          } else if (isActive) {
+            // アクティブ状態（青白いハイライト）
+            unitSprite.tint = 0xaaffff;
+          } else {
+            // 通常状態（チームカラー）
+            unitSprite.tint = teamTint;
           }
 
-          // HPバーの描画
-          if (
-            unit.stats &&
-            typeof unit.stats.hp === 'number' &&
-            typeof unit.stats.maxHp === 'number'
-          ) {
-            drawHealthBar(unitGraphic, unit.stats.hp, unit.stats.maxHp);
-          }
         } catch (error) {
           console.error('ユニット描画エラー:', error, 'ユニット:', unit);
         }
@@ -159,58 +175,7 @@ export function useUnitRenderer(
     }
   };
 
-  /**
-   * CTゲージの描画
-   * @param graphic グラフィックスオブジェクト
-   * @param chargeTime 現在のCT値
-   */
-  const drawChargeTimeBar = (graphic: PIXI.Graphics, chargeTime: number) => {
-    try {
-      const ctRatio = chargeTime / 100;
-      graphic.beginFill(0xffcc44, 0.8);
-      graphic.lineStyle(1, 0x000000, 0.8);
-      graphic.drawRect(
-        -TILE_WIDTH / 5,
-        -TILE_HEIGHT / 2,
-        (TILE_WIDTH / 2.5) * ctRatio,
-        5
-      );
-      graphic.endFill();
-    } catch (error) {
-      console.error('CTゲージ描画エラー:', error);
-    }
-  };
-
-  /**
-   * HPバーの描画
-   * @param graphic グラフィックスオブジェクト
-   * @param currentHp 現在のHP
-   * @param maxHp 最大HP
-   */
-  const drawHealthBar = (
-    graphic: PIXI.Graphics,
-    currentHp: number,
-    maxHp: number
-  ) => {
-    try {
-      const hpRatio = currentHp / maxHp;
-      graphic.beginFill(0x44ff44, 0.8);
-      graphic.lineStyle(1, 0x000000, 0.8);
-      graphic.drawRect(
-        -TILE_WIDTH / 5,
-        -TILE_HEIGHT / 2 + 7,
-        (TILE_WIDTH / 2.5) * hpRatio,
-        5
-      );
-      graphic.endFill();
-    } catch (error) {
-      console.error('HPバー描画エラー:', error);
-    }
-  };
-
-  /**
-   * すべてのユニットを再描画
-   */
+  // redrawAllUnits関数も対応して修正する必要があります
   const redrawAllUnits = (state: BattleState) => {
     const unitContainer = unitContainerRef.current;
     if (!unitContainer) return;
@@ -219,9 +184,9 @@ export function useUnitRenderer(
       console.log('全ユニットを再描画します');
 
       // 既存のユニットをすべて削除
-      unitsRef.current.forEach((graphic) => {
-        unitContainer.removeChild(graphic);
-        graphic.destroy();
+      unitsRef.current.forEach((sprite) => {
+        unitContainer.removeChild(sprite);
+        sprite.destroy();
       });
       unitsRef.current.clear();
 

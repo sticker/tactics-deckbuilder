@@ -3,9 +3,7 @@ import { useRef, useEffect } from 'react';
 import * as PIXI from 'pixi.js';
 import { Position, BattleState, GameSystem } from 'game-logic';
 import { isoToScreen, lerp } from '../../utils/isoConversion';
-import {
-  UNIT_MOVE_BASE_DURATION,
-} from '../../utils/constants';
+import { UNIT_MOVE_BASE_DURATION } from '../../utils/constants';
 
 // 移動アニメーション用の型定義
 interface AnimatingUnit {
@@ -24,7 +22,7 @@ interface AnimatingUnit {
  */
 export function useAnimation(
   gameSystemRef: React.RefObject<GameSystem | null>,
-  unitsRef: React.RefObject<Map<string, PIXI.Graphics>>
+  unitsRef: React.RefObject<Map<string, PIXI.Sprite>>
 ) {
   // アニメーション中のユニットリスト
   const animatingUnitsRef = useRef<AnimatingUnit[]>([]);
@@ -195,77 +193,116 @@ export function useAnimation(
     }
   };
 
-  /**
-   * ユニット位置を更新
-   * @param anim アニメーション情報
-   * @param currentStep 現在のステップ
-   * @param elapsed 経過時間
-   * @param state ゲーム状態
-   */
+  // 移動方向に基づいて向きを決定する関数
+  const getDirectionFromMove = (fromPos: Position, toPos: Position): string => {
+    // 安全チェック - fromPosとtoPosが有効か確認
+    if (
+      !fromPos ||
+      !toPos ||
+      typeof fromPos.x !== 'number' ||
+      typeof fromPos.y !== 'number' ||
+      typeof toPos.x !== 'number' ||
+      typeof toPos.y !== 'number'
+    ) {
+      console.warn('getDirectionFromMove: 無効な位置データ', {
+        fromPos,
+        toPos,
+      });
+      return 'south'; // デフォルト方向を返す
+    }
+
+    const dx = toPos.x - fromPos.x;
+    const dy = toPos.y - fromPos.y;
+
+    // x方向とy方向の変化量の大きい方を優先
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? 'east' : 'west';
+    } else {
+      return dy > 0 ? 'south' : 'north';
+    }
+  };
+
+  // アニメーション更新関数内で向きを更新
   const updateUnitPosition = (
     anim: AnimatingUnit,
     currentStep: number,
     elapsed: number,
     state: BattleState
   ) => {
-    // 現在のステップと次のステップの間を補間
-    if (currentStep < anim.path.length - 1) {
-      const unit = state.units.find((u) => u.id === anim.unitId);
-      const unitGraphic = unitsRef.current?.get(anim.unitId);
+    try {
+      // 現在のステップと次のステップの間を補間
+      if (currentStep < anim.path.length - 1) {
+        const unit = state.units.find((u) => u.id === anim.unitId);
+        const unitGraphic = unitsRef.current?.get(anim.unitId);
 
-      if (unit && unitGraphic) {
-        // 安全にインデックスをチェック
-        if (
-          currentStep >= 0 &&
-          currentStep < anim.path.length &&
-          currentStep + 1 < anim.path.length
-        ) {
-          const currentPos = anim.path[currentStep];
-          const nextPos = anim.path[currentStep + 1];
-
-          // パス位置の有効性を確認
+        if (unit && unitGraphic) {
+          // 安全にインデックスをチェック
           if (
-            currentPos &&
-            nextPos &&
-            typeof currentPos.x === 'number' &&
-            typeof currentPos.y === 'number' &&
-            typeof nextPos.x === 'number' &&
-            typeof nextPos.y === 'number'
+            currentStep >= 0 &&
+            currentStep < anim.path.length &&
+            currentStep + 1 < anim.path.length
           ) {
-            // ステップ内での進行度を計算（0〜1）
-            const stepProgress =
-              (elapsed % anim.stepDuration) / anim.stepDuration;
+            const currentPos = anim.path[currentStep];
+            const nextPos = anim.path[currentStep + 1];
 
-            // 2点間を線形補間
-            const interpPos = {
-              x: lerp(currentPos.x, nextPos.x, stepProgress),
-              y: lerp(currentPos.y, nextPos.y, stepProgress),
-            };
+            // パス位置の有効性を確認
+            if (
+              currentPos &&
+              nextPos &&
+              typeof currentPos.x === 'number' &&
+              typeof currentPos.y === 'number' &&
+              typeof nextPos.x === 'number' &&
+              typeof nextPos.y === 'number'
+            ) {
+              // ユニットが持つdirectionプロパティに方向を設定
+              // 型チェックを追加
+              if (unit.hasOwnProperty('direction')) {
+                // @ts-ignore - TypeScriptの型チェックを無視（direction追加前のコンパイル対応）
+                unit.direction = getDirectionFromMove(currentPos, nextPos);
+              }
 
-            // 高さを考慮した座標を計算
-            const currentTile = state.map.getTile(currentPos);
-            const nextTile = state.map.getTile(nextPos);
-            const currentHeight =
-              currentTile && typeof currentTile.height === 'number'
-                ? currentTile.height
-                : 0;
-            const nextHeight =
-              nextTile && typeof nextTile.height === 'number'
-                ? nextTile.height
-                : 0;
+              // 以下は既存の処理
+              // ステップ内での進行度を計算（0〜1）
+              const stepProgress =
+                (elapsed % anim.stepDuration) / anim.stepDuration;
 
-            // 高さも補間
-            const interpHeight = lerp(currentHeight, nextHeight, stepProgress);
+              // 2点間を線形補間
+              const interpPos = {
+                x: lerp(currentPos.x, nextPos.x, stepProgress),
+                y: lerp(currentPos.y, nextPos.y, stepProgress),
+              };
 
-            // ユニットのバウンス効果（軽いジャンプ感）
-            const bounceHeight = Math.sin(stepProgress * Math.PI) * 8;
+              // 高さを考慮した座標を計算
+              const currentTile = state.map.getTile(currentPos);
+              const nextTile = state.map.getTile(nextPos);
+              const currentHeight =
+                currentTile && typeof currentTile.height === 'number'
+                  ? currentTile.height
+                  : 0;
+              const nextHeight =
+                nextTile && typeof nextTile.height === 'number'
+                  ? nextTile.height
+                  : 0;
 
-            // 画面座標に変換して位置を更新
-            const { x, y } = isoToScreen(interpPos, interpHeight);
-            unitGraphic.position.set(x, y - bounceHeight);
+              // 高さも補間
+              const interpHeight = lerp(
+                currentHeight,
+                nextHeight,
+                stepProgress
+              );
+
+              // ユニットのバウンス効果（軽いジャンプ感）
+              const bounceHeight = Math.sin(stepProgress * Math.PI) * 8;
+
+              // 画面座標に変換して位置を更新
+              const { x, y } = isoToScreen(interpPos, interpHeight);
+              unitGraphic.position.set(x, y - bounceHeight);
+            }
           }
         }
       }
+    } catch (error) {
+      console.error('ユニット位置更新エラー:', error);
     }
   };
 

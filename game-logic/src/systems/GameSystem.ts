@@ -20,15 +20,15 @@ export class GameSystem {
   public setupInitialState(): void {
     // プレイヤーチーム（4ユニット）
     this.addUnitToTeam('Knight 1', 'Knight', { x: 1, y: 1 }, 0);
-    this.addUnitToTeam('Archer 1', 'Archer', { x: 2, y: 1 }, 0);
-    this.addUnitToTeam('Mage 1', 'Mage', { x: 3, y: 1 }, 0);
-    this.addUnitToTeam('Priest 1', 'Priest', { x: 4, y: 1 }, 0);
+    this.addUnitToTeam('Archer 2', 'Archer', { x: 2, y: 1 }, 0);
+    this.addUnitToTeam('Rogue 3', 'Rogue', { x: 3, y: 1 }, 0);
+    this.addUnitToTeam('Mage 4', 'Mage', { x: 4, y: 1 }, 0);
 
     // 敵チーム（4ユニット）
-    this.addUnitToTeam('Enemy Knight', 'Knight', { x: 11, y: 11 }, 1);
-    this.addUnitToTeam('Enemy Archer', 'Archer', { x: 10, y: 11 }, 1);
-    this.addUnitToTeam('Enemy Mage', 'Mage', { x: 9, y: 11 }, 1);
-    this.addUnitToTeam('Enemy Priest', 'Priest', { x: 8, y: 11 }, 1);
+    this.addUnitToTeam('Enemy Knight 1', 'Knight', { x: 11, y: 11 }, 1);
+    this.addUnitToTeam('Enemy Archer 2', 'Archer', { x: 10, y: 11 }, 1);
+    this.addUnitToTeam('Enemy Rogue 3', 'Rogue', { x: 9, y: 11 }, 1);
+    this.addUnitToTeam('Enemy Mage 4', 'Mage', { x: 8, y: 11 }, 1);
 
     // マップに高低差を設定する例
     this.setTileHeight({ x: 6, y: 6 }, 2);

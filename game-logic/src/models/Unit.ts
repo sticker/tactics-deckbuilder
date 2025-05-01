@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 import { Position } from './Position';
 
 export type JobType = 'Knight' | 'Archer' | 'Mage' | 'Priest' | 'Rogue' | 'Engineer';
+export type Direction = 'north' | 'east' | 'south' | 'west';
 
 export interface UnitStats {
   hp: number;
@@ -17,6 +18,7 @@ export interface Unit {
   name: string;
   job: JobType;
   position: Position;
+  direction: Direction;
   stats: UnitStats;
   teamId: number; // チームID（0: プレイヤー、1: 敵）
 }
@@ -26,6 +28,7 @@ export function createUnit(
   job: JobType,
   position: Position,
   teamId: number,
+  direction: Direction = 'south',
   stats?: Partial<UnitStats>
 ): Unit {
   // ジョブごとのデフォルトステータス
@@ -43,6 +46,7 @@ export function createUnit(
     name,
     job,
     position,
+    direction,
     teamId,
     stats: {
       ...defaultStats[job],
