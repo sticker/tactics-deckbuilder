@@ -2,11 +2,7 @@
 import { useEffect, useRef } from 'react';
 import * as PIXI from 'pixi.js';
 import { GameSystem, Position, Unit, BattleState } from 'game-logic';
-import {
-  isoToScreen,
-  screenToIso,
-  isTileHit,
-} from '../../utils/isoConversion';
+import { isoToScreen, screenToIso, isTileHit } from '../../utils/isoConversion';
 import { findPath } from '../../utils/pathfinding';
 import {
   TILE_HEIGHT,
@@ -32,6 +28,7 @@ export function useEventHandlers(
   selectedUnitId: string | null,
   setSelectedUnitId: (id: string | null) => void,
   currentActionType: string | null,
+  targetSelectionMode: boolean = false, // 追加: 対象選択モードを受け取る
   moveUnit?: (unitId: string, targetPosition: Position) => void,
   executeAction?: (
     sourceUnitId: string,
@@ -506,9 +503,33 @@ export function useEventHandlers(
 
   // ユニットクリック時の処理
   const handleUnitClick = (clickedUnit: Unit) => {
-    // 既に選択されているユニットがあり、アクションが選択されている場合
-    if (selectedUnitId && currentActionType && currentActionType !== 'move') {
+    // デバッグ情報を出力
+    console.log('ユニットクリック:', {
+      clickedId: clickedUnit.id,
+      selectedId: selectedUnitId,
+      action: currentActionType,
+      targetMode: targetSelectionMode,
+    });
+
+    const gameSystem = gameSystemRef.current;
+    if (!gameSystem) return;
+
+    const state = gameSystem.getState();
+
+    // 対象選択モードの場合
+    if (
+      selectedUnitId &&
+      currentActionType &&
+      currentActionType !== 'move' &&
+      targetSelectionMode
+    ) {
       console.log('アクション対象が選択されました:', clickedUnit.id);
+
+      // 選択元のユニットがアクティブかチェック
+      if (state.activeUnitId !== selectedUnitId) {
+        console.log('選択元ユニットがアクティブではありません');
+        return;
+      }
 
       // アクション実行処理に移行
       handleActionClick(clickedUnit.id);
@@ -519,6 +540,7 @@ export function useEventHandlers(
       return;
     }
 
+    // 通常のユニット選択処理
     // 既存の選択をクリア
     if (clearAllRanges) clearAllRanges();
 
@@ -642,53 +664,64 @@ export function useEventHandlers(
     console.log(`ユニット ${unitId} を移動します:`, targetPosition);
 
     try {
-      // 選択解除中であることを記録
-      const unit = gameSystem.getState().units.find((u) => u.id === unitId);
+      // 現在のユニットと状態を取得
+      const state = gameSystem.getState();
+      const unit = state.units.find((u) => u.id === unitId);
 
       if (!unit) {
         console.error('移動するユニットが見つかりません');
         return;
       }
 
-      // まず選択状態をクリア
+      // アクティブユニットチェック
+      if (state.activeUnitId !== unitId) {
+        console.log('このユニットは現在行動できません');
+        if (window.showGameNotification) {
+          window.showGameNotification('このユニットは現在行動できません');
+        }
+        return;
+      }
+
+      // 選択状態をクリア
       setSelectedUnitId(null);
       if (clearAllRanges) clearAllRanges();
 
       // パスを計算
-      const path = findPath(
-        gameSystem.getState(),
-        unit.position,
-        targetPosition
-      );
+      const path = findPath(state, unit.position, targetPosition);
 
-      // パスが有効なら移動アニメーションを開始
+      // パスが有効なら移動を実行
       if (path && path.length > 0) {
-        // アニメーション時間を計算（パスの長さに基づく、ただし上限あり）
+        // 移動をゲームロジックで実行（アニメーション前に）
+        const success = gameSystem.moveUnit(unitId, targetPosition);
+
+        if (!success) {
+          console.error('移動ロジックの実行に失敗');
+          if (window.showGameNotification) {
+            window.showGameNotification('移動に失敗しました');
+          }
+          return;
+        }
+
+        console.log('移動ロジック成功、アニメーション開始');
+
+        // アニメーション時間を計算
         const animationDuration = Math.min(
           path.length * UNIT_MOVE_STEP_DURATION,
           800
         );
 
-        // アニメーション開始
+        // アニメーション開始（ロジックの後）
         startMoveAnimation(unitId, path, animationDuration, () => {
-          // アニメーション完了後に実際のゲームロジックでユニットを移動
-          const success = gameSystem.moveUnit(unitId, targetPosition);
+          // アニメーション完了後の処理
+          console.log('移動アニメーション完了');
 
-          if (success) {
-            console.log('移動成功');
-            if (window.showGameNotification) {
-              window.showGameNotification('移動完了');
-            }
+          // サーバーに移動を通知
+          if (moveUnit) {
+            moveUnit(unitId, targetPosition);
+          }
 
-            // 必要に応じてサーバーに移動を通知
-            if (moveUnit) {
-              moveUnit(unitId, targetPosition);
-            }
-          } else {
-            console.error('移動ロジックの実行に失敗');
-            if (window.showGameNotification) {
-              window.showGameNotification('移動に失敗しました');
-            }
+          if (window.showGameNotification) {
+            window.showGameNotification('移動完了');
           }
         });
       } else {

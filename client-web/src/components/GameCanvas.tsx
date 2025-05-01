@@ -246,12 +246,43 @@ const GameCanvas: React.FC = () => {
   };
 
   // ユニット移動の実行処理
+  // 移動の実行処理
   const executeUnitMove = (unitId: string, targetPosition: Position) => {
     if (!gameSystemRef.current) return;
 
     console.log(`ユニット移動実行: ${unitId} -> `, targetPosition);
 
     const gameSystem = gameSystemRef.current;
+    const state = gameSystem.getState();
+
+    // 移動前にアクティブユニットかどうか、行動状態をチェック
+    const unit = state.units.find((u) => u.id === unitId);
+
+    if (!unit) {
+      console.log('ユニットが見つかりません');
+      return;
+    }
+
+    if (state.activeUnitId !== unitId) {
+      console.log('このユニットは現在行動できません');
+      if (window.showGameNotification) {
+        window.showGameNotification('このユニットは現在行動できません');
+      }
+      return;
+    }
+
+    if (
+      unit.actionState === ActionState.MOVED ||
+      unit.actionState === ActionState.ACTION_USED ||
+      unit.actionState === ActionState.TURN_ENDED
+    ) {
+      console.log('このユニットはすでに行動済みです');
+      if (window.showGameNotification) {
+        window.showGameNotification('このユニットはすでに行動済みです');
+      }
+      return;
+    }
+
     const success = gameSystem.moveUnit(unitId, targetPosition);
 
     if (success) {
@@ -264,28 +295,37 @@ const GameCanvas: React.FC = () => {
       if (moveUnit) {
         moveUnit(unitId, targetPosition);
       }
+
+      // 選択状態もクリア
+      setSelectedUnitId(null);
+
+      // 状態更新通知 - 重要：これで UI に状態変化を反映させる
+      handleStateUpdate();
     } else {
       console.log('移動失敗');
       if (window.showGameNotification) {
         window.showGameNotification('移動失敗');
       }
     }
-
-    // 状態更新通知
-    handleStateUpdate();
   };
 
   // ゲームレンダラーのセットアップ（アプリ初期化後のみ）
-  const { selectedUnitId, handleActionSelect, forceRedraw, isInitialized } =
-    useGameRenderer(
-      appRef,
-      gameSystemRef,
-      appInitialized,
-      currentAbilityId,
-      connectionState,
-      executeUnitMove,
-      executeAbility
-    );
+  const {
+    selectedUnitId,
+    setSelectedUnitId,
+    handleActionSelect,
+    forceRedraw,
+    isInitialized,
+  } = useGameRenderer(
+    appRef,
+    gameSystemRef,
+    appInitialized,
+    currentAbilityId,
+    targetSelectionMode, // 追加: 対象選択モードを渡す
+    connectionState,
+    executeUnitMove,
+    executeAbility
+  );
 
   // ゲームループのセットアップ
   useGameLoop(gameSystemRef);

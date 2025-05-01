@@ -17,7 +17,8 @@ export function useGameRenderer(
   gameSystemRef: React.RefObject<GameSystem | null>,
   isAppInitialized: boolean = false,
   currentActionType: string | null,
-  _connectionState?: any, // 未使用パラメータ名の前に_をつける
+  targetSelectionMode: boolean = false, // 追加: パラメータとして受け取る
+  _connectionState?: any,
   executeUnitMove?: (unitId: string, targetPosition: Position) => void,
   executeAbility?: (
     sourceUnitId: string,
@@ -93,8 +94,9 @@ export function useGameRenderer(
     selectedUnitId,
     setSelectedUnitId,
     currentActionType,
+    targetSelectionMode, // 追加: 対象選択モードを渡す
     executeUnitMove,
-    executeActionAdapter, // アダプター関数を渡す
+    executeActionAdapter,
     showMoveRange,
     clearMoveRange,
     showActionRange,
